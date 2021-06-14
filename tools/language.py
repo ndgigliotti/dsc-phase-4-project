@@ -1,10 +1,7 @@
-import enum
+import re
 from functools import partial
 from operator import itemgetter
-import re
-from typing import Union
-import fuzzywuzzy
-import numpy as np
+
 import pandas as pd
 from fuzzywuzzy.process import extractOne as extract_one
 from IPython.core.display import Markdown, display
@@ -44,7 +41,8 @@ def identify_brands(
     # Sort and return
     return findings.sort_index()
 
-def fuzzy_match(data: pd.Series, options:ArrayLike, **kwargs):
+
+def fuzzy_match(data: pd.Series, options: ArrayLike, **kwargs):
     extract_option = partial(extract_one, choices=options, **kwargs)
     scores = data.map(extract_option, "ignore")
     data = data.to_frame("original")
