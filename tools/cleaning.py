@@ -1,9 +1,11 @@
+from functools import wraps
 from IPython.display import display, HTML
 import pandas as pd
+from deprecation import deprecated
 import numpy as np
 
 
-def nan_rows(data: pd.DataFrame, total: bool = False) -> pd.DataFrame:
+def null_rows(data: pd.DataFrame, total: bool = False) -> pd.DataFrame:
     """Get rows with missing values.
 
     Parameters
@@ -18,10 +20,16 @@ def nan_rows(data: pd.DataFrame, total: bool = False) -> pd.DataFrame:
         Table of rows with missing values.
     """
     if total:
-        nan_mask = data.isna().all(axis=1)
+        null_mask = data.isnull().all(axis=1)
     else:
-        nan_mask = data.isna().any(axis=1)
-    return data.loc[nan_mask].copy()
+        null_mask = data.isnull().any(axis=1)
+    return data.loc[null_mask].copy()
+
+
+@wraps(null_rows)
+@deprecated(details="use `null_rows` instead")
+def nan_rows(data: pd.DataFrame, total: bool = False) -> pd.DataFrame:
+    return null_rows(**locals())
 
 
 def dup_rows(data: pd.DataFrame, **kwargs) -> pd.DataFrame:
@@ -42,7 +50,7 @@ def dup_rows(data: pd.DataFrame, **kwargs) -> pd.DataFrame:
     return data.loc[data.duplicated(**kwargs)].copy()
 
 
-def who_is_nan(
+def who_is_null(
     data: pd.DataFrame, column: str = None, index: str = None, total: bool = False
 ) -> np.ndarray:
     """Get indices of rows with missing values.
@@ -68,41 +76,21 @@ def who_is_nan(
         data = data.set_index(index)
     if column is None:
         if total:
-            nan_mask = data.isna().all(axis=1)
+            null_mask = data.isnull().all(axis=1)
         else:
-            nan_mask = data.isna().any(axis=1)
+            null_mask = data.isnull().any(axis=1)
     else:
-        nan_mask = data[column].isna()
-    return data.loc[nan_mask].index.to_numpy()
+        null_mask = data[column].isnull()
+    return data.loc[null_mask].index.to_numpy()
 
 
-# def token_info(data: pd.DataFrame, normalize: bool = False) -> pd.DataFrame:
-#     """Get info about min tokens, max tokens, and number of types.
+@wraps(who_is_null)
+@deprecated(details="use `who_is_null` instead")
+def who_is_nan(
+    data: pd.DataFrame, column: str = None, index: str = None, total: bool = False
+) -> np.ndarray:
+    return who_is_null(**locals())
 
-#     Categorical features often have a small number of unique value-types
-#     and a larger number of tokens (instances) of those types. Sometimes
-#     the distribution of types is imbalanced, meaning that some have many
-#     more tokens than others. This function returns the minimum token
-#     count, maximum token count, and number of types to indicate the balance.
-
-#     Parameters
-#     ----------
-#     data : DataFrame
-#         DataFrame for getting token and type counts.
-#     normalize : bool, optional
-#         Return relative token frequencies instead of counts, by default False.
-
-#     Returns
-#     -------
-#     DataFrame
-#         Token and type information.
-#     """
-#     funcs = ["min", "max", "count"]
-#     df = data.apply(lambda x: x.value_counts(normalize).agg(funcs))
-#     df.rename(
-#         {"count": "types", "min": "min_tokens", "max": "max_tokens"}, inplace=True
-#     )
-#     return df.T.sort_values("min_tokens")
 
 def class_distrib(data: pd.DataFrame, normalize: bool = False) -> pd.DataFrame:
     """Get class membership counts for the smallest and largest classes.
@@ -132,8 +120,9 @@ def class_distrib(data: pd.DataFrame, normalize: bool = False) -> pd.DataFrame:
     )
     return df.T.sort_values("min_members")
 
+
 def info(data: pd.DataFrame, round_pct: int = 2) -> pd.DataFrame:
-    """Get counts of NaNs, uniques, and duplicate observations.
+    """Get counts of nulls, uniques, and duplicate observations.
 
     Parameters
     ----------
@@ -148,19 +137,19 @@ def info(data: pd.DataFrame, round_pct: int = 2) -> pd.DataFrame:
         Table of information.
     """
     n_rows = data.shape[0]
-    nan = data.isna().sum().to_frame("nan")
+    null = data.isnull().sum().to_frame("null")
     dup = pd.DataFrame(
         index=data.columns, data=data.duplicated().sum(), columns=["dup"]
     )
     uniq = data.nunique().to_frame("uniq")
-    info = pd.concat([nan, dup, uniq], axis=1)
+    info = pd.concat([null, dup, uniq], axis=1)
     pcts = (info / n_rows) * 100
     pcts.columns = pcts.columns.map(lambda x: f"{x}_%")
     pcts = pcts.round(round_pct)
     info = pd.concat([info, pcts], axis=1)
-    order = ["nan", "nan_%", "uniq", "uniq_%", "dup", "dup_%"]
+    order = ["null", "null_%", "uniq", "uniq_%", "dup", "dup_%"]
     info = info.loc[:, order]
-    info.sort_values("nan", ascending=False, inplace=True)
+    info.sort_values("null", ascending=False, inplace=True)
     return info
 
 
@@ -213,7 +202,7 @@ def impute(data: pd.DataFrame, strategy="mode") -> pd.DataFrame:
     elif strategy == "median":
         filler = data.median()
     data = data.fillna(filler)
-    has_na = data.isna().any(axis=0)
+    has_na = data.isnull().any(axis=0)
     if has_na.any():
         failed = has_na[has_na].index.to_list()
         raise ValueError(f"Could not fill values in {failed} with {strategy}")
