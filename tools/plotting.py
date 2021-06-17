@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn as sns
+import wordcloud as wc
 from matplotlib import ticker
 from sklearn.preprocessing import minmax_scale
 
@@ -486,7 +487,7 @@ def multi_rel(
         Share the y axis between subplots. Defaults to True.
     Returns
     -------
-    Figure7498
+    Figure
         Multiple relational plots.
     """
     fig, axs = smart_subplots(
@@ -566,6 +567,83 @@ def multi_dist(
     return fig
 
 
+def countplot(
+    *,
+    data: pd.Series,
+    normalize: bool = False,
+    heat: str = "coolwarm",
+    heat_desat: float = 0.6,
+    orient: str = "h",
+    sort: str = "desc",
+    figsize: Tuple[float, float] = (5, 5),
+    annot: bool = True,
+    ax: plt.Axes = None,
+    **kwargs,
+) -> plt.Axes:
+    """Plot value counts of every feature in `data`.
+
+    Parameters
+    ----------
+    data : Series
+        Data to plot.
+    normalize : bool, optional
+        Show fractions instead of counts, by default False.
+    heat : str, optional
+        Color palette for heat, by default "coolwarm".
+    heat_desat : float, optional
+        Saturation of heat color palette, by default 0.6.
+    ncols : int, optional
+        Number of columns for subplots, by default 3.
+    figsize : int, optional
+        Figure size, defaults to (5, 5). Ignored if `ax` is passed.
+    orient : str, optional
+        Bar orientation, by default "h".
+    sort : str, optional
+        Direction for sorting bars. Can be 'asc' or 'desc' (default).
+    annot : bool, optional
+        Annotate bars, True by default.
+    ax : Axes, optional
+        Axes to plot on.
+
+    Returns
+    -------
+    Figure
+        Value count plot.
+    """
+    if ax is None:
+        _, ax = plt.subplots(figsize=figsize)
+    sort = sort.lower()
+
+    df = data.value_counts(normalize=normalize).to_frame("Count")
+    df.index.name = data.name or "Series"
+    df.reset_index(inplace=True)
+    pal = heat_palette(df["Count"], heat, desat=heat_desat)
+    ax = barplot(
+        data=df,
+        x=data.name or "Series",
+        y="Count",
+        ax=ax,
+        orient=orient,
+        sort=sort,
+        palette=pal,
+        **kwargs,
+    )
+    title = f"`{data.name}` Value Counts" if data.name else "Value Counts"
+    ax.set(title=title)
+    format_spec = "{x:.0%}" if normalize else "{x:,.0f}"
+    if annot:
+        annot_bars(ax, orient=orient, format_spec=format_spec)
+
+    orient = orient.lower()
+    if orient == "h":
+        ax.xaxis.set_major_formatter(ticker.StrMethodFormatter(format_spec))
+        ax.set(ylabel=None)
+    else:
+        ax.yaxis.set_major_formatter(ticker.StrMethodFormatter(format_spec))
+        ax.set(xlabel=None)
+    return ax
+
+
 def multi_countplot(
     *,
     data: pd.DataFrame,
@@ -576,7 +654,7 @@ def multi_countplot(
     height: int = 5,
     orient: str = "h",
     sort: str = "desc",
-    annot:bool=True,
+    annot: bool = True,
     **kwargs,
 ) -> plt.Figure:
     """Plot value counts of every feature in `data`.
@@ -950,3 +1028,46 @@ def cat_corr_heatmap(
     ax.set_ylabel(ylabel, labelpad=10)
     ax.set_title(title, pad=10)
     return ax
+
+def _validate_orient(orient):
+    if orient.lower() not in {"h", "v"}:
+        raise ValueError(f"`orient` must be 'h' or 'v', not {orient}")
+
+
+def emo_wordclouds(emo_vecs, size=(5, 3), orient="h", **kwargs):
+    _validate_orient(orient)
+    if orient.lower() == "v":
+        ncols, nrows = (0, 3)
+    else:
+        ncols, nrows = (3, 0)
+
+    fig, axs = smart_subplots(nplots=3, size=size, ncols=ncols, nrows=nrows)
+
+    if emo_vecs.shape[0] == 3 and emo_vecs.shape[1] > 3:
+        emo_vecs = emo_vecs.T
+    if emo_vecs.shape[1] != 3:
+        raise ValueError("Expected `emo_vecs` to have exactly 3 columns")
+
+    emo_vecs.columns = emo_vecs.columns.str.lower()
+    color_funcs = {
+        "neutral": wc.get_single_color_func("gray"),
+        "positive": wc.get_single_color_func("green"),
+        "negative": wc.get_single_color_func("red"),
+    }
+
+    for ax, column in zip(axs.flat, emo_vecs.columns):
+        width, height = np.array(size) * 100
+        cloud = wc.WordCloud(
+            color_func=color_funcs[column], width=width, height=height, **kwargs
+        )
+        cloud = cloud.generate_from_frequencies(emo_vecs["neutral"])
+        ax.imshow(cloud.to_image(), interpolation="bilinear", aspect="equal")
+
+        # Hide grid lines
+        ax.grid(False)
+
+        # Hide ticks
+        ax.set_xticks([])
+        ax.set_yticks([])
+    fig.tight_layout()
+    return fig
