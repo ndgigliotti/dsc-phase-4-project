@@ -1,9 +1,9 @@
 import inspect
-from typing import Callable, List
+from typing import Callable, List, Union
 
 import numpy as np
 import pandas as pd
-from pandas._typing import FrameOrSeries
+from pandas._typing import FrameOrSeries, ArrayLike
 
 NULL = frozenset([np.nan, pd.NA, None])
 
@@ -160,7 +160,6 @@ def pandas_heatmap(
     )
     table.set_na_rep(na_rep)
     table.set_precision(precision)
-    # table.highlight_null("white")
     return table
 
 
@@ -267,6 +266,7 @@ def swap_index(data: pd.Series) -> pd.Series:
     Series
         Swapped Series.
     """
+    return pd.Series(data.index, index=data.values, name=data.name, copy=True)
 
 
 def explicit_sort(
@@ -274,7 +274,7 @@ def explicit_sort(
     *,
     order: list,
     mode: str = "values",
-    inplace:bool=False,
+    inplace: bool = False,
     **kwargs,
 ) -> FrameOrSeries:
     """Sort DataFrame or Series values in explicitly specified order.
@@ -302,7 +302,7 @@ def explicit_sort(
 
     # Define vectorized key function
     get_rank = np.vectorize(lambda x: order.index(x))
-    
+
     # Sort according to mode
     if mode == "values":
         data = data.sort_values(key=get_rank, inplace=inplace, **kwargs)
@@ -311,3 +311,19 @@ def explicit_sort(
 
     # Return copy or None
     return data
+
+
+def bitgen(seed: Union[None, int, ArrayLike] = None):
+    return np.random.default_rng(seed).bit_generator
+    
+def get_func_names(funcs: List[Callable]):
+    names = []
+    for f in funcs:
+        if hasattr(f, "pyfunc"):
+            name = f.pyfunc.__name__
+        elif hasattr(f, "func"):
+            name = f.func.__name__
+        else:
+            name = f.__name__
+        names.append(name)
+    return names
