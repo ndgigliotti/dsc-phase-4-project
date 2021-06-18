@@ -11,6 +11,7 @@ from matplotlib import ticker
 from sklearn.preprocessing import minmax_scale
 
 from . import outliers, utils
+from ._validation import _validate_orient
 
 # Default style settings for heatmaps
 HEATMAP_STYLE = MappingProxyType(
@@ -1029,10 +1030,6 @@ def cat_corr_heatmap(
     ax.set_title(title, pad=10)
     return ax
 
-def _validate_orient(orient):
-    if orient.lower() not in {"h", "v"}:
-        raise ValueError(f"`orient` must be 'h' or 'v', not {orient}")
-
 
 def emo_wordclouds(emo_vecs, size=(5, 3), orient="h", **kwargs):
     _validate_orient(orient)
@@ -1063,6 +1060,27 @@ def emo_wordclouds(emo_vecs, size=(5, 3), orient="h", **kwargs):
         cloud = cloud.generate_from_frequencies(emo_vecs["neutral"])
         ax.imshow(cloud.to_image(), interpolation="bilinear", aspect="equal")
 
+        # Hide grid lines
+        ax.grid(False)
+
+        # Hide ticks
+        ax.set_xticks([])
+        ax.set_yticks([])
+    fig.tight_layout()
+    return fig
+
+
+def multi_wordcloud(doc_vecs, size=(5, 3), ncols=3, **kwargs):
+    fig, axs = smart_subplots(nplots=doc_vecs.columns.size, size=size, ncols=ncols)
+
+    for ax, column in zip(axs.flat, doc_vecs.columns):
+        width, height = np.array(size) * 100
+        cloud = wc.WordCloud(
+            colormap=sns.color_palette("Greys", as_cmap=True), width=width, height=height, **kwargs
+        )
+        cloud = cloud.generate_from_frequencies(doc_vecs[column])
+        ax.imshow(cloud.to_image(), interpolation="bilinear", aspect="equal")
+        ax.set(title=column)
         # Hide grid lines
         ax.grid(False)
 
