@@ -1,0 +1,37 @@
+,Tag,Description
+0,CC,Coordinating conjunction
+1,CD,Cardinal number
+2,DT,Determiner
+3,EX,Existential there
+4,FW,Foreign word
+5,IN,Preposition or subordinating conjunction
+6,JJ,Adjective
+7,JJR,"Adjective, comparative"
+8,JJS,"Adjective, superlative"
+9,LS,List item marker
+10,MD,Modal
+11,NN,"Noun, singular or mass"
+12,NNS,"Noun, plural"
+13,NNP,"Proper noun, singular"
+14,NNPS,"Proper noun, plural"
+15,PDT,Predeterminer
+16,POS,Possessive ending
+17,PRP,Personal pronoun
+18,PRP$,Possessive pronoun
+19,RB,Adverb
+20,RBR,"Adverb, comparative"
+21,RBS,"Adverb, superlative"
+22,RP,Particle
+23,SYM,Symbol
+24,TO,to
+25,UH,Interjection
+26,VB,"Verb, base form"
+27,VBD,"Verb, past tense"
+28,VBG,"Verb, gerund or present participle"
+29,VBN,"Verb, past participle"
+30,VBP,"Verb, non-3rd person singular present"
+31,VBZ,"Verb, 3rd person singular present"
+32,WDT,Wh-determiner
+33,WP,Wh-pronoun
+34,WP$,Possessive wh-pronoun
+35,WRB,Wh-adverb
