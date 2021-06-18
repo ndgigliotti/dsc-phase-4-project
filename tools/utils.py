@@ -1,9 +1,11 @@
 import inspect
+from functools import singledispatch
 from typing import Callable, List, Union
 
 import numpy as np
 import pandas as pd
-from pandas._typing import FrameOrSeries, ArrayLike
+from pandas._typing import ArrayLike, FrameOrSeries
+from pandas.api.types import is_list_like
 
 NULL = frozenset([np.nan, pd.NA, None])
 
@@ -315,7 +317,8 @@ def explicit_sort(
 
 def bitgen(seed: Union[None, int, ArrayLike] = None):
     return np.random.default_rng(seed).bit_generator
-    
+
+
 def get_func_names(funcs: List[Callable]):
     names = []
     for f in funcs:
@@ -327,3 +330,45 @@ def get_func_names(funcs: List[Callable]):
             name = f.__name__
         names.append(name)
     return names
+
+
+def implode(data: pd.Series):
+    new_data = dict.fromkeys(data.index)
+    for key in new_data:
+        val = data.loc[key]
+        if isinstance(val, (pd.Series, pd.DataFrame)):
+            new_data[key] = val.to_list()
+        else:
+            new_data[key] = [val]
+    return pd.Series(new_data, name=data.name)
+
+@singledispatch
+def expand(data: pd.Series, column:str=None, labels:List=None):
+    if not data.map(is_list_like).all():
+        raise ValueError("Elements must all be list-like")
+    if not data.map(len).nunique() == 1:
+        raise ValueError("List-likes must all be same length")
+    col_data = list(zip(*data))
+    if labels is not None:
+        if len(labels) != len(col_data):
+            raise ValueError("Number of `labels` must equal number of new columns")
+    else:
+        labels = range(len(col_data))
+        if data.name is not None:
+            labels = [f"{data.name}_{x}" for x in labels]
+    col_data = dict(zip(labels, col_data))
+    return pd.DataFrame(col_data, index=data.index)
+
+@expand.register
+def _(data: pd.DataFrame, column:str=None, labels:List=None):
+    if data.columns.value_counts()[column] > 1:
+        raise ValueError("`column` must be unique in DataFrame")
+    if column is None:
+        raise ValueError("Must pass `column` if input is DataFrame")
+    expanded = expand(data.loc[:, column])
+    insert_at = data.columns.get_loc(column)
+    data = data.drop(columns=column)
+    for i, label in enumerate(expanded.columns):
+        data.insert(insert_at+i, label, expanded.loc[:, label], allow_duplicates=False)
+    return data
+    
