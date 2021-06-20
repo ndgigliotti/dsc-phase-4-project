@@ -1,5 +1,5 @@
 import inspect
-from functools import singledispatch
+from functools import partial, singledispatch
 from typing import Callable, List, Union
 
 import numpy as np
@@ -208,7 +208,7 @@ def filter_pipe(
     return data
 
 
-def to_title(snake_case: str):
+def title(snake_case: str):
     """Format snake case string as title."""
     return snake_case.replace("_", " ").strip().title()
 
@@ -216,13 +216,13 @@ def to_title(snake_case: str):
 def title_mode(data: pd.DataFrame):
     """Return copy of `data` with strings formatted as titles."""
     result = data.copy()
-    result.update(result.select_dtypes("object").applymap(to_title))
+    result.update(result.select_dtypes("object").applymap(title))
     for label, column in result.select_dtypes("category").items():
-        result[label] = column.cat.rename_categories(to_title)
+        result[label] = column.cat.rename_categories(title)
     if result.columns.dtype == "object":
-        result.columns = result.columns.map(to_title)
+        result.columns = result.columns.map(title)
     if result.index.dtype == "object":
-        result.index = result.index.map(to_title)
+        result.index = result.index.map(title)
     return result
 
 
@@ -372,3 +372,8 @@ def _(data: pd.DataFrame, column:str=None, labels:List=None):
         data.insert(insert_at+i, label, expanded.loc[:, label], allow_duplicates=False)
     return data
     
+def flat_map(func: Callable, arr: np.ndarray, *args, **kwargs):
+    shape = arr.shape
+    func = partial(func, *args, **kwargs)
+    arr = np.array(list(map(func, arr.flat)), dtype=arr.dtype)
+    return arr.reshape(shape)
