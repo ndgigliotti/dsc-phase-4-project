@@ -3,11 +3,12 @@ from typing import Union
 
 import numpy as np
 import pandas as pd
+from nltk.tokenize.casual import TweetTokenizer as NLTKTweetTokenizer
+from scipy.sparse import spmatrix
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.preprocessing import FunctionTransformer
 from sklearn.utils import as_float_array
 from sklearn.utils.validation import check_is_fitted
-from nltk.tokenize.casual import TweetTokenizer as NLTKTweetTokenizer
 
 # The following partial objects are shorthand callables
 # for constructing commonly used estimators.
@@ -29,6 +30,9 @@ class PandasWrapper(BaseEstimator, TransformerMixin):
     def __init__(self, transformer=None):
         super().__init__()
         self.transformer = transformer
+
+    def unwrap(self):
+        return self.transformer
 
     def reconst_frame(self, X: np.ndarray):
         X = pd.DataFrame(X, self.index_, self.columns_)
@@ -114,8 +118,9 @@ class DummyEncoder(BaseEstimator, TransformerMixin):
 
 
 class FloatArrayForcer(BaseEstimator, TransformerMixin):
-    def __init__(self, force_all_finite=True) -> None:
+    def __init__(self, force_all_finite=True, force_dense=False) -> None:
         self.force_all_finite = force_all_finite
+        self.force_dense = force_dense
         super().__init__()
 
     @property
@@ -143,7 +148,10 @@ class FloatArrayForcer(BaseEstimator, TransformerMixin):
 
     def transform(self, X):
         check_is_fitted(self)
-        return as_float_array(X, force_all_finite=self.force_all_finite)
+        X = as_float_array(X, force_all_finite=self.force_all_finite)
+        if isinstance(X, spmatrix) and self.force_dense:
+            X = X.todense()
+        return X
 
     def inverse_transform(self, X):
         check_is_fitted(self)
