@@ -89,18 +89,20 @@ def classification_report(
     DataFrame or Styler (if `heatmap = True`)
         Diagnostic report table.
     """
+    labels = np.unique(np.hstack([y_test.flatten(), y_pred.flatten()]))
+
     report = pd.DataFrame(
         sk_report(y_test, y_pred, output_dict=True, zero_division=zero_division)
     )
 
-    order = report.columns.to_list()[:2] + [
+    order = report.columns.to_list()[: labels.size] + [
         "macro avg",
         "weighted avg",
         "accuracy",
     ]
     report = report.loc[:, order]
 
-    support = report.loc["support"].iloc[:2]
+    support = report.loc["support"].iloc[: labels.size]
     support /= report.loc["support", "macro avg"]
     report.loc["support"] = support
 
@@ -111,7 +113,7 @@ def classification_report(
     )
 
     return (
-        pandas_heatmap(report, subset=["0.0", "1.0"], axis=1, vmin=0, vmax=1)
+        pandas_heatmap(report, subset=labels, axis=1, vmin=0, vmax=1)
         if heatmap
         else report
     )
@@ -136,6 +138,8 @@ def classification_plots(
     estimator: Union[BaseEstimator, Pipeline],
     X_test: Union[pd.DataFrame, np.ndarray],
     y_test: Union[pd.Series, np.ndarray],
+    pos_label: Union[bool, int, float, str] = None,
+    multi_class: str = "ovr",
     average: str = "weighted",
     size: Tuple[float, float] = (5, 5),
 ) -> plt.Figure:
@@ -160,7 +164,35 @@ def classification_plots(
     Figure
         Figure containing three subplots.
     """
-    fig, (ax1, ax2, ax3) = smart_subplots(nplots=3, ncols=3, size=size)
+    labels = np.unique(y_test.flatten())
+    if labels.size > 2:
+        fig, ax1 = plt.subplots(figsize=size)
+    else:
+        fig, (ax1, ax2, ax3) = smart_subplots(nplots=3, ncols=3, size=size)
+        plot_roc_curve(estimator, X_test, y_test, pos_label=pos_label, ax=ax2)
+        plot_precision_recall_curve(
+            estimator, X_test, y_test, pos_label=pos_label, ax=ax3
+        )
+        baseline_style = dict(lw=2, linestyle=":", color="r", alpha=1)
+        ax2.plot([0, 1], [0, 1], **baseline_style)
+        ax3.plot([0, 1], [y_test.mean()] * 2, **baseline_style)
+        ax3.plot([0, 0], [y_test.mean(), 1], **baseline_style)
+        try:
+            y_score = estimator.predict_proba(X_test)[:, pos_label]
+        except AttributeError:
+            y_score = estimator.decision_function(X_test)
+        auc_score = roc_auc_score(
+            y_test, y_score, average=average, multi_class=multi_class
+        ).round(2)
+        ap_score = average_precision_score(
+            y_test, y_score, average=average, multi_class=multi_class
+        ).round(2)
+
+        ax2.set_title(f"Receiver Operating Characteristic Curve: AUC = {auc_score}")
+        ax3.set_title(f"Precision-Recall Curve: AP = {ap_score}")
+        ax2.get_legend().set_visible(False)
+        ax3.get_legend().set_visible(False)
+
     plot_confusion_matrix(
         estimator,
         X_test,
@@ -170,27 +202,10 @@ def classification_plots(
         colorbar=False,
         ax=ax1,
     )
-    plot_roc_curve(estimator, X_test, y_test, ax=ax2)
-    plot_precision_recall_curve(estimator, X_test, y_test, ax=ax3)
-
-    baseline_style = dict(lw=2, linestyle=":", color="r", alpha=1)
-    ax2.plot([0, 1], [0, 1], **baseline_style)
-    ax3.plot([0, 1], [y_test.mean()] * 2, **baseline_style)
-    ax3.plot([0, 0], [y_test.mean(), 1], **baseline_style)
-
-    try:
-        y_score = estimator.predict_proba(X_test)[:, estimator.classes_.argmax()]
-    except AttributeError:
-        y_score = estimator.decision_function(X_test)
-    auc_score = roc_auc_score(y_test, y_score, average=average).round(2)
-    ap_score = average_precision_score(y_test, y_score, average=average).round(2)
 
     ax1.set_title("Normalized Confusion Matrix")
-    ax2.set_title(f"Receiver Operating Characteristic Curve: AUC = {auc_score}")
-    ax3.set_title(f"Precision-Recall Curve: AP = {ap_score}")
-    ax2.get_legend().set_visible(False)
-    ax3.get_legend().set_visible(False)
     fig.tight_layout()
+
     return fig
 
 
@@ -260,7 +275,10 @@ def standard_report(
     estimator: BaseEstimator,
     X_test: Union[pd.DataFrame, np.ndarray],
     y_test: Union[pd.Series, np.ndarray],
+    pos_label: Union[bool, int, float, str] = None,
+    multi_class: str = "ovr",
     zero_division: str = "warn",
+    size: Tuple[float, float] = (4, 4),
 ) -> None:
     """Display standard report of diagnostic metrics and plots for classification.
 
@@ -276,7 +294,14 @@ def standard_report(
         Value to return for division by zero: 0, 1, or 'warn'.
     """
     table = classification_report(
-        y_test, estimator.predict(X_test), zero_division=zero_division, heatmap=True
+        y_test, estimator.predict(X_test), zero_division=zero_division, heatmap=False
     )
-    classification_plots(estimator, X_test, y_test)
+    classification_plots(
+        estimator,
+        X_test,
+        y_test,
+        pos_label=pos_label,
+        multi_class=multi_class,
+        size=size,
+    )
     display(table)
