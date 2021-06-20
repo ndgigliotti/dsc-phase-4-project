@@ -7,6 +7,13 @@ def _validate_orient(orient):
         raise ValueError(f"`orient` must be 'h' or 'v', not {orient}")
 
 
+def _validate_sort(sort):
+    if sort is None:
+        pass
+    elif sort.lower() not in {"asc", "desc"}:
+        raise ValueError("`sort` must be 'asc', 'desc', or None")
+
+
 def _check_if_tagged(docs: pd.Series):
     """Check if `docs` are POS tagged."""
     list_like = docs.map(is_list_like)

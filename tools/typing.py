@@ -5,7 +5,7 @@ from pandas._typing import ArrayLike
 from pandas.core.series import Series
 
 # RandomState-related types accepted by Pandas
-RandomBasis = Union[int, ArrayLike, np.random.BitGenerator, np.random.RandomState]
+RandomSeed = Union[int, ArrayLike, np.random.BitGenerator, np.random.RandomState]
 
 # String or compiled regex
 StrOrPattern = Union[str, Pattern]
