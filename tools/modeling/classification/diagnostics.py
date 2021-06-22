@@ -204,6 +204,7 @@ def classification_plots(
     )
 
     ax1.set_title("Normalized Confusion Matrix")
+    ax1.grid(False)
     fig.tight_layout()
 
     return fig
@@ -272,13 +273,14 @@ def plot_double_confusion_matrices(
 
 
 def standard_report(
-    estimator: BaseEstimator,
+    estimator: Union[BaseEstimator, Pipeline],
     X_test: Union[pd.DataFrame, np.ndarray],
     y_test: Union[pd.Series, np.ndarray],
     pos_label: Union[bool, int, float, str] = None,
     multi_class: str = "ovr",
     zero_division: str = "warn",
     size: Tuple[float, float] = (4, 4),
+    heatmap: bool = True,
 ) -> None:
     """Display standard report of diagnostic metrics and plots for classification.
 
@@ -294,7 +296,7 @@ def standard_report(
         Value to return for division by zero: 0, 1, or 'warn'.
     """
     table = classification_report(
-        y_test, estimator.predict(X_test), zero_division=zero_division, heatmap=False
+        y_test, estimator.predict(X_test), zero_division=zero_division, heatmap=heatmap
     )
     classification_plots(
         estimator,
@@ -305,3 +307,26 @@ def standard_report(
         size=size,
     )
     display(table)
+
+
+def test_fit(
+    estimator: Union[BaseEstimator, Pipeline],
+    X_train: Union[pd.DataFrame, np.ndarray],
+    X_test: Union[pd.DataFrame, np.ndarray],
+    y_train: Union[pd.DataFrame, np.ndarray],
+    y_test: Union[pd.Series, np.ndarray],
+    pos_label: Union[bool, int, float, str] = None,
+    multi_class: str = "ovr",
+    zero_division: str = "warn",
+    size: Tuple[float, float] = (4, 4),
+):
+    estimator.fit(X_train, y_train)
+    standard_report(
+        estimator,
+        X_test,
+        y_test,
+        pos_label=pos_label,
+        multi_class=multi_class,
+        zero_division=zero_division,
+        size=size,
+    )

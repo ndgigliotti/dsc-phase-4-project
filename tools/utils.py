@@ -1,6 +1,7 @@
 import inspect
 from functools import partial, singledispatch
 from typing import Callable, List, Union
+from deprecation import deprecated
 
 import numpy as np
 import pandas as pd
@@ -119,12 +120,12 @@ def binary_cols(data: pd.DataFrame) -> list:
     return data.columns[data.nunique() == 2].to_list()
 
 
-def get_defaults(callable: Callable) -> dict:
+def get_defaults(func: Callable) -> dict:
     """Returns dict of parameters with their default values, if any.
 
     Parameters
     ----------
-    callable : Callable
+    func : Callable
         Callable to look up parameters for.
 
     Returns
@@ -137,11 +138,27 @@ def get_defaults(callable: Callable) -> dict:
     TypeError
         `callable` must be Callable.
     """
-    if not isinstance(callable, Callable):
-        raise TypeError(f"`callable` must be Callable, not {type(callable)}")
-    params = pd.Series(inspect.signature(callable).parameters)
+    if not isinstance(func, Callable):
+        raise TypeError(f"`callable` must be Callable, not {type(func)}")
+    params = pd.Series(inspect.signature(func).parameters)
     defaults = params.map(lambda x: x.default)
     return defaults.to_dict()
+
+
+def get_param_names(func: Callable) -> list:
+    """Returns list of parameter names.
+
+    Parameters
+    ----------
+    func : Callable
+        Callable to look up parameter names for.
+
+    Returns
+    -------
+    list
+        List of parameter names.
+    """
+    return list(inspect.signature(func).parameters.keys())
 
 
 def pandas_heatmap(
@@ -319,17 +336,35 @@ def bitgen(seed: Union[None, int, ArrayLike] = None):
     return np.random.default_rng(seed).bit_generator
 
 
+@deprecated(details="Use overloaded `get_func_name`")
 def get_func_names(funcs: List[Callable]):
-    names = []
-    for f in funcs:
-        if hasattr(f, "pyfunc"):
-            name = f.pyfunc.__name__
-        elif hasattr(f, "func"):
-            name = f.func.__name__
-        else:
-            name = f.__name__
-        names.append(name)
-    return names
+    return get_func_name
+
+
+@singledispatch
+def get_func_name(func: Callable):
+    if hasattr(func, "pyfunc"):
+        name = get_func_name(func.pyfunc)
+    elif hasattr(func, "func"):
+        name = get_func_name(func.func)
+    else:
+        name = func.__name__
+    return name
+
+
+@get_func_name.register
+def _(func: pd.Series):
+    return func.map(get_func_name)
+
+
+@get_func_name.register
+def _(func: np.ndarray):
+    return flat_map(get_func_name, func)
+
+
+@get_func_name.register
+def _(func: list):
+    return [get_func_name(x) for x in func]
 
 
 def implode(data: pd.Series):
@@ -342,8 +377,9 @@ def implode(data: pd.Series):
             new_data[key] = [val]
     return pd.Series(new_data, name=data.name)
 
+
 @singledispatch
-def expand(data: pd.Series, column:str=None, labels:List=None):
+def expand(data: pd.Series, column: str = None, labels: List = None):
     if not data.map(is_list_like).all():
         raise ValueError("Elements must all be list-like")
     if not data.map(len).nunique() == 1:
@@ -359,8 +395,9 @@ def expand(data: pd.Series, column:str=None, labels:List=None):
     col_data = dict(zip(labels, col_data))
     return pd.DataFrame(col_data, index=data.index)
 
+
 @expand.register
-def _(data: pd.DataFrame, column:str=None, labels:List=None):
+def _(data: pd.DataFrame, column: str = None, labels: List = None):
     if data.columns.value_counts()[column] > 1:
         raise ValueError("`column` must be unique in DataFrame")
     if column is None:
@@ -369,9 +406,12 @@ def _(data: pd.DataFrame, column:str=None, labels:List=None):
     insert_at = data.columns.get_loc(column)
     data = data.drop(columns=column)
     for i, label in enumerate(expanded.columns):
-        data.insert(insert_at+i, label, expanded.loc[:, label], allow_duplicates=False)
+        data.insert(
+            insert_at + i, label, expanded.loc[:, label], allow_duplicates=False
+        )
     return data
-    
+
+
 def flat_map(func: Callable, arr: np.ndarray, *args, **kwargs):
     shape = arr.shape
     func = partial(func, *args, **kwargs)

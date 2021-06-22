@@ -1,9 +1,9 @@
 import itertools
 import re
 import string
-from functools import partial, reduce, singledispatch
+from functools import partial, singledispatch
 from operator import itemgetter
-from typing import Callable, DefaultDict, List, Tuple
+from typing import Callable, DefaultDict, List, Tuple, Union, cast
 
 import gensim.parsing.preprocessing as gsp
 import nltk
@@ -25,21 +25,6 @@ from .typing import RandomSeed, SeriesOrArray, StrOrPattern
 from . import utils
 from ._validation import _check_if_tagged
 from gensim.models.doc2vec import TaggedDocument
-
-# Vectorized preprocessing funcs from Gensim
-strip_short = np.vectorize(gsp.strip_short, otypes=[str])
-strip_multiwhite = np.vectorize(gsp.strip_multiple_whitespaces, otypes=[str])
-strip_numeric = np.vectorize(gsp.strip_numeric, otypes=[str])
-strip_non_alphanum = np.vectorize(gsp.strip_non_alphanum, otypes=[str])
-split_alphanum = np.vectorize(gsp.split_alphanum, otypes=[str])
-strip_tags = np.vectorize(gsp.strip_tags, otypes=[str])
-stem_text = np.vectorize(gsp.stem_text, otypes=[str])
-
-# Vectorized preprocessing funcs from NTLK
-remove_handles = np.vectorize(casual.remove_handles, otypes=[str])
-
-# Vectorized Unicode-to-readable-ASCII converter
-unidecode = np.vectorize(unidecode, otypes=[str])
 
 TREEBANK_TAGS = frozenset(
     {
@@ -84,18 +69,65 @@ TREEBANK_TAGS = frozenset(
 
 
 @singledispatch
-def lowercase(docs: pd.Series):
-    return docs.str.lower()
+def univ_map(docs: pd.Series, func: Callable):
+    return docs.map(func)
 
 
-@lowercase.register
-def _(docs: np.ndarray):
-    return utils.flat_map(lambda x: x.lower(), docs)
+@univ_map.register
+def _(docs: np.ndarray, func: Callable):
+    return utils.flat_map(func, docs)
 
 
-@lowercase.register
-def _(docs: list):
-    return list(map(lambda x: x.lower(), docs))
+@univ_map.register
+def _(docs: list, func: Callable):
+    return list(map(func, docs))
+
+
+def lowercase(docs: Union[pd.Series, np.ndarray, list]):
+    # Named func instead of lambda to avoid pickling errors
+    def to_lower(x):
+        return x.lower()
+    return univ_map(docs, to_lower)
+
+
+def strip_short(docs: Union[pd.Series, np.ndarray, list]):
+    return univ_map(docs, gsp.strip_short)
+
+
+def strip_multiwhite(docs: Union[pd.Series, np.ndarray, list]):
+    return univ_map(docs, gsp.strip_multiple_whitespaces)
+
+
+def strip_numeric(docs: Union[pd.Series, np.ndarray, list]):
+    return univ_map(docs, gsp.strip_numeric)
+
+
+def strip_non_alphanum(docs: Union[pd.Series, np.ndarray, list]):
+    return univ_map(docs, gsp.strip_non_alphanum)
+
+
+def split_alphanum(docs: Union[pd.Series, np.ndarray, list]):
+    return univ_map(docs, gsp.split_alphanum)
+
+
+def limit_repeats(docs: Union[pd.Series, np.ndarray, list]):
+    return univ_map(docs, casual.reduce_lengthening)
+
+
+def strip_tags(docs: Union[pd.Series, np.ndarray, list]):
+    return univ_map(docs, gsp.strip_tags)
+
+
+def stem_text(docs: Union[pd.Series, np.ndarray, list]):
+    return univ_map(docs, gsp.stem_text)
+
+
+def strip_handles(docs: Union[pd.Series, np.ndarray, list]):
+    return univ_map(docs, casual.remove_handles)
+
+
+def uni2ascii(docs: Union[pd.Series, np.ndarray, list]):
+    return univ_map(docs, unidecode)
 
 
 def _compile_punct(punct, exclude):
@@ -121,21 +153,6 @@ def _(docs: np.ndarray, repl=" ", punct=string.punctuation, exclude=""):
 def _(docs: list, repl=" ", punct=string.punctuation, exclude=""):
     re_punct = _compile_punct(punct, exclude)
     return [re_punct.sub(repl, x) for x in docs]
-
-
-@singledispatch
-def limit_repeats(docs: pd.Series):
-    return docs.map(casual.reduce_lengthening)
-
-
-@limit_repeats.register
-def _(docs: np.ndarray):
-    return utils.flat_map(casual.reduce_lengthening, docs)
-
-
-@limit_repeats.register
-def _(docs: list):
-    return list(map(casual.reduce_lengthening, docs))
 
 
 def readable_sample(
@@ -190,7 +207,8 @@ def wordnet_lemmatize(docs: pd.Series, tokenizer: Callable = None):
     # Restore tags if docs were pretagged
     if pretagged:
         words = pd.Series(list(zip(words, treebank_pos)), index=words.index)
-    return utils.implode(words).rename(docs.name).reindex_like(docs)
+    words = utils.implode(words).rename(docs.name).reindex_like(docs)
+    return words.str.join(" ")
 
 
 @wordnet_lemmatize.register

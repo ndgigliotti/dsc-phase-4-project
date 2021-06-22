@@ -1,10 +1,10 @@
-from functools import partial, reduce, singledispatchmethod
+from functools import partial, singledispatch, singledispatchmethod
 from typing import Union
 
 import numpy as np
 import pandas as pd
 from nltk.tokenize.casual import TweetTokenizer as NLTKTweetTokenizer
-from scipy.sparse import spmatrix
+from scipy.sparse import csr_matrix
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.preprocessing import FunctionTransformer
 from sklearn.utils import as_float_array
@@ -24,69 +24,6 @@ Log10Transformer = partial(
     func=np.log10,
     inverse_func=partial(np.power, 10),
 )
-
-
-class PandasWrapper(BaseEstimator, TransformerMixin):
-    def __init__(self, transformer=None):
-        super().__init__()
-        self.transformer = transformer
-
-    def unwrap(self):
-        return self.transformer
-
-    def reconst_frame(self, X: np.ndarray):
-        X = pd.DataFrame(X, self.index_, self.columns_)
-        for column, dtype in self.dtypes_.items():
-            X[column] = X[column].astype(dtype)
-        return X
-
-    @singledispatchmethod
-    def fit(self, X: pd.DataFrame, y: pd.Series = None):
-        self.index_ = X.index
-        self.columns_ = X.columns
-        self.dtypes_ = X.dtypes
-        if self.transformer is not None:
-            if y is not None:
-                y = y.to_numpy()
-            self.transformer.fit(X.to_numpy(), y)
-        return self
-
-    @fit.register
-    def _(self, X: pd.Series, y: pd.Series = None):
-        self.fit(X.to_frame(), y)
-        return self
-
-    @singledispatchmethod
-    def transform(self, X: pd.DataFrame):
-        check_is_fitted(self)
-        if self.transformer is not None:
-            init_shape = X.shape
-            X = self.transformer.transform(X.to_numpy())
-            if X.shape != init_shape:
-                raise RuntimeError("Transformation must preserve shape and order")
-            X = self.reconst_frame(X)
-        return X
-
-    @transform.register
-    def _(self, X: pd.Series):
-        return self.transform(X.to_frame()).squeeze()
-
-    @singledispatchmethod
-    def inverse_transform(self, X: pd.DataFrame):
-        check_is_fitted(self)
-        if self.transformer is not None:
-            init_shape = X.shape
-            X = self.transformer.inverse_transform(X.to_numpy())
-            if X.shape != init_shape:
-                raise RuntimeError(
-                    "Inverse transformation must preserve shape and order"
-                )
-            X = self.reconst_frame(X)
-        return X
-
-    @inverse_transform.register
-    def _(self, X: pd.Series):
-        return self.inverse_transform(X.to_frame()).squeeze()
 
 
 class DummyEncoder(BaseEstimator, TransformerMixin):
@@ -117,7 +54,7 @@ class DummyEncoder(BaseEstimator, TransformerMixin):
         return dummies
 
 
-class FloatArrayForcer(BaseEstimator, TransformerMixin):
+class ArrayForcer(BaseEstimator, TransformerMixin):
     def __init__(self, force_all_finite=True, force_dense=False) -> None:
         self.force_all_finite = force_all_finite
         self.force_dense = force_dense
@@ -138,6 +75,15 @@ class FloatArrayForcer(BaseEstimator, TransformerMixin):
         return self
 
     @fit.register
+    def _(self, X: csr_matrix, y=None):
+        self.columns_ = None
+        self.index_ = None
+        self.dtypes_ = X.dtype
+        self.input_type_ = csr_matrix
+        self.input_shape_ = X.shape
+        return self
+
+    @fit.register
     def _(self, X: pd.DataFrame, y=None):
         self.columns_ = X.columns
         self.index_ = X.index
@@ -149,7 +95,7 @@ class FloatArrayForcer(BaseEstimator, TransformerMixin):
     def transform(self, X):
         check_is_fitted(self)
         X = as_float_array(X, force_all_finite=self.force_all_finite)
-        if isinstance(X, spmatrix) and self.force_dense:
+        if isinstance(X, csr_matrix) and self.force_dense:
             X = X.todense()
         return X
 

@@ -1,11 +1,13 @@
+
 import numpy as np
 from gensim.models.doc2vec import Doc2Vec, TaggedDocument
-from scipy.sparse import csr_matrix
+
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.feature_extraction.text import _VectorizerMixin
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import Binarizer, Normalizer
 from sklearn.utils.validation import check_is_fitted
+from .._validation import _validate_raw_docs
 
 
 class BaseVectorizer(TransformerMixin, _VectorizerMixin, BaseEstimator):
@@ -45,11 +47,7 @@ class BaseVectorizer(TransformerMixin, _VectorizerMixin, BaseEstimator):
         self.norm = norm
         self.dtype = dtype
 
-    def _validate_input(self, X):
-        if isinstance(X, str):
-            raise ValueError(
-                "Iterable over raw text documents expected, string object received."
-            )
+
 
     def build_post_pipe(self):
         post_pipe = Pipeline([("bin", None), ("norm", None)])
@@ -65,7 +63,7 @@ class BaseVectorizer(TransformerMixin, _VectorizerMixin, BaseEstimator):
 
     def fit(self, X, y=None):
         # triggers a parameter validation
-        self._validate_input(X)
+        _validate_raw_docs(X)
         self._warn_for_unused_params()
         self._validate_params()
         return self
@@ -178,7 +176,7 @@ class Doc2Vectorizer(BaseVectorizer):
 
     def fit(self, X, y=None):
         # Parameter validation
-        self._validate_input(X)
+        _validate_raw_docs(X)
         self._warn_for_unused_params()
         self._validate_params()
 
@@ -216,7 +214,7 @@ class Doc2Vectorizer(BaseVectorizer):
 
     def transform(self, X):
         check_is_fitted(self)
-        self._validate_input(X)
+        _validate_raw_docs(X)
         docs = list(self.analyze_docs(X))
         vecs = [self.gensim_model_.infer_vector(doc) for doc in docs]
         vecs = np.reshape(np.array(vecs), (len(docs), self.gensim_model_.vector_size))
