@@ -198,16 +198,31 @@ def space_tokenize(docs: Union[str, ListLike]):
 
 
 def tokenize_tag(docs: Union[str, ListLike], tokenizer: Callable = None):
+    input_type = type(docs)
     if tokenizer is None:
         docs = space_tokenize(docs)
     else:
         docs = _process(docs, tokenizer)
-    docs = _process(docs, nltk.pos_tag)
+    if input_type is str:
+        docs = nltk.pos_tag(docs)
+    else:
+        docs = _process(docs, nltk.pos_tag)
+    return docs
+
+
+def tokenize_stem(docs: Union[str, ListLike], tokenizer: Callable = None):
+    if tokenizer is None:
+        docs = space_tokenize(docs)
+    else:
+        docs = _process(docs, tokenizer)
+    docs = stem_text(docs)
     return docs
 
 
 @singledispatch
-def wordnet_lemmatize(docs: pd.Series, tokenizer: Callable = None):
+def wordnet_lemmatize(
+    docs: pd.Series, tokenizer: Callable = None, as_tokens: bool = False
+):
     # Tokenize and tag POS
     docs = tokenize_tag(docs, tokenizer=tokenizer)
 
@@ -224,24 +239,26 @@ def wordnet_lemmatize(docs: pd.Series, tokenizer: Callable = None):
 
     # Rebuild exploded docs
     docs = utils.implode(words).rename(docs.name).reindex_like(docs)
-    return docs.str.join(" ")
+    return docs if as_tokens else docs.str.join(" ")
 
 
 @wordnet_lemmatize.register
-def _(docs: np.ndarray, tokenizer: Callable = None):
+def _(docs: np.ndarray, tokenizer: Callable = None, as_tokens: bool = False):
     shape = docs.shape
-    docs = wordnet_lemmatize(pd.Series(docs.flat), tokenizer=tokenizer)
+    docs = wordnet_lemmatize(
+        pd.Series(docs.flat), tokenizer=tokenizer, as_tokens=as_tokens
+    )
     return docs.to_numpy().reshape(shape)
 
 
 @wordnet_lemmatize.register
-def _(docs: list, tokenizer: Callable = None):
-    docs = wordnet_lemmatize(pd.Series(docs), tokenizer=tokenizer)
+def _(docs: list, tokenizer: Callable = None, as_tokens: bool = False):
+    docs = wordnet_lemmatize(pd.Series(docs), tokenizer=tokenizer, as_tokens=as_tokens)
     return docs.to_list()
 
 
 @wordnet_lemmatize.register
-def _(docs: str, tokenizer: Callable = None):
+def _(docs: str, tokenizer: Callable = None, as_tokens: bool = False):
     # Tokenize and tag POS
     words = tokenize_tag(docs)
 
@@ -254,7 +271,7 @@ def _(docs: str, tokenizer: Callable = None):
     wnl = WordNetLemmatizer()
     words = [wnl.lemmatize(x, y) for x, y in words]
 
-    return " ".join(words)
+    return words if as_tokens else " ".join(words)
 
 
 def filter_pos(
