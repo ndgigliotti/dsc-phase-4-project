@@ -140,7 +140,7 @@ def classification_plots(
     y_test: Union[pd.Series, np.ndarray],
     pos_label: Union[bool, int, float, str] = None,
     multi_class: str = "ovr",
-    average: str = "weighted",
+    average: str = "macro",
     size: Tuple[float, float] = (5, 5),
 ) -> plt.Figure:
     """Plot confusion matrix, ROC curve, and precision-recall curve.
@@ -155,7 +155,7 @@ def classification_plots(
     y_test : Series or ndarray of shape (n_samples,)
         target test set.
     average : str, optional
-        Method of averaging: 'micro', 'macro', 'weighted' (default), 'samples'.
+        Method of averaging: 'micro', 'macro' (default), 'weighted', 'samples'.
     size: tuple (float, float), optional
         Size of each subplot; (5, 5) by default.
 

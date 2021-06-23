@@ -12,3 +12,6 @@ StrOrPattern = Union[str, Pattern]
 
 # Series or NDArray
 SeriesOrArray = TypeVar("SeriesOrArray", Series, np.ndarray)
+
+# List-like
+ListLike = TypeVar("ListLike", Series, np.ndarray, list)

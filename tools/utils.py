@@ -145,7 +145,7 @@ def get_defaults(func: Callable) -> dict:
     return defaults.to_dict()
 
 
-def get_param_names(func: Callable) -> list:
+def get_param_names(func: Callable, include_self=False) -> list:
     """Returns list of parameter names.
 
     Parameters
@@ -158,7 +158,10 @@ def get_param_names(func: Callable) -> list:
     list
         List of parameter names.
     """
-    return list(inspect.signature(func).parameters.keys())
+    params = list(inspect.signature(func).parameters.keys())
+    if "self" in params:
+        params.remove("self")
+    return params
 
 
 def pandas_heatmap(

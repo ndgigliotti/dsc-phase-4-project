@@ -33,9 +33,7 @@ def _validate_transformer(obj):
     trans = isinstance(obj, TransformerMixin)
     pipe = isinstance(obj, Pipeline)
     if not ((est and trans) or pipe):
-        raise TypeError(
-            "Transformer must be Sklearn transformer or Pipeline"
-        )
+        raise TypeError("Transformer must be Sklearn transformer or Pipeline")
 
 
 def _validate_raw_docs(X: Iterable):

@@ -1,5 +1,6 @@
 import os
-import textwrap
+from operator import itemgetter
+from types import MappingProxyType
 from typing import List, Union
 
 import numpy as np
@@ -10,7 +11,13 @@ from feature_engine.selection import (
 from IPython.core.display import HTML
 from IPython.display import display
 from sklearn.base import clone
-from sklearn.model_selection import GridSearchCV, RandomizedSearchCV
+from sklearn.experimental import enable_halving_search_cv
+from sklearn.model_selection import (
+    GridSearchCV,
+    RandomizedSearchCV,
+    HalvingGridSearchCV,
+    HalvingRandomSearchCV,
+)
 from sklearn.pipeline import Pipeline
 from sklearn.utils.validation import check_is_fitted
 import joblib
@@ -18,69 +25,121 @@ from .. import utils
 
 Variables = Union[None, int, str, List[Union[str, int]]]
 
-
-def _drop_splits(cv_results: dict) -> pd.DataFrame:
-    """Clean up messy grid search results and return DataFrame.
-
-    Converts `cv_results` to DataFrame and removes the numerous
-    "splitX_" columns which make the table hard to read.
-
-    Parameters
-    ----------
-    cv_results : dict
-        Dict of results from GridSearchCV or RandomizedSearchCV.
-
-    Returns
-    -------
-    DataFrame
-        Cleaned up results.
-    """
-    cv_results = pd.DataFrame(cv_results)
-    splits = cv_results.filter(regex=r"split[0-9]+_").columns
-    cv_results.drop(columns=splits, inplace=True)
-    cv_results.sort_values("rank_test_score", inplace=True)
-    return cv_results
-
-
-def grid_search(
-    estimator,
-    param_grid,
-    X,
-    y,
-    name,
-    dirname="grid_search",
-    scoring=None,
-    n_jobs=None,
-    cv=None,
-    verbose=1,
-    pre_dispatch="2*n_jobs",
-    error_score=np.nan,
-    return_train_score=False,
-):
-    search = GridSearchCV(
-        estimator,
-        param_grid,
-        scoring=scoring,
-        n_jobs=n_jobs,
-        refit=False,
-        cv=cv,
-        verbose=verbose,
-        pre_dispatch=pre_dispatch,
-        error_score=error_score,
-        return_train_score=return_train_score,
-    )
-    search.fit(X, y)
+def _to_pickle(search, name, dirname, test=False):
     os.makedirs(dirname, exist_ok=True)
     filename = name if name.endswith(".joblib") else f"{name}.joblib"
     filename = os.path.join(dirname, filename)
     joblib.dump(search, filename)
+    if test:
+        os.remove(filename)
     return filename
 
-def load_results(path):
+def sweep(
+    estimator,
+    param_space,
+    X,
+    y,
+    name,
+    dirname="sweeps",
+    scoring=None,
+    n_jobs=None,
+    n_iter=10,
+    refit=False,
+    cv=None,
+    kind="grid",
+    verbose=1,
+    pre_dispatch="2*n_jobs",
+    error_score=np.nan,
+    return_train_score=False,
+    random_state=None,
+    n_candidates="exhaust",
+    factor=3,
+    resource="n_samples",
+    max_resources="auto",
+    min_resources="smallest",
+    aggressive_elimination=False,
+    **kwargs,
+):
+    """Flexible parameter search function.
+    
+    Fit and pickle a GridSearchCV, HalvingGridSearchCV, RandomizedSearchCV,
+    or HalvingRandomSearchCV object. Immediately saving the search estimator
+    prevents you from losing the results of a broad sweep."""
+
+    # Select search class
+    kinds = dict(
+        grid=GridSearchCV,
+        hgrid=HalvingGridSearchCV,
+        rand=RandomizedSearchCV,
+        hrand=HalvingRandomSearchCV,
+    )
+    try:
+        cls = kinds[kind.lower()]
+    except KeyError:
+        raise ValueError("Valid kinds are 'grid', 'hgrid', 'rand', and 'hrand'.")
+
+    # Convert param space to dict
+    if isinstance(param_space, pd.Series):
+        param_space = param_space.to_dict()
+    
+    # Filter out the relevant parameters
+    relevant = pd.Series(locals()).drop("kwargs")
+    relevant["param_grid"] = param_space
+    relevant["param_distributions"] = param_space
+    relevant = relevant.loc[utils.get_param_names(cls.__init__)]
+    relevant.update(kwargs)
+
+    search = cls(**relevant)
+
+    # Test pickling search estimator before fitting
+    _to_pickle(search, name, dirname, test=True)
+
+    search.fit(X, y)
+
+    # Pickle search estimator
+    filename = _to_pickle(search, name, dirname)
+
+    return filename
+
+
+def load_results(
+    path,
+    drop_splits=True,
+    short_names=True,
+    drop_dicts=True,
+    stats=("mean_test_score", "rank_test_score"),
+    rank_index=False,
+):
     if not path.endswith(".joblib"):
         path = f"{path}.joblib"
     search = joblib.load(os.path.normpath(path))
-    return _drop_splits(search.cv_results_)
+    df = pd.DataFrame(search.cv_results_)
+    par_cols = df.columns[df.columns.str.startswith("param_")].to_list()
+    par_cols.sort()
+    if not drop_dicts:
+        par_cols += ["params"]
+    stat_cols = df.columns[~df.columns.isin(par_cols)].to_list()
+    df = utils.explicit_sort(df, order=(par_cols + stat_cols), mode="index", axis=1)
+    if stats is not None:
+        df.drop(set(stat_cols) - set(stats), axis=1, inplace=True)
+    if drop_splits:
+        splits = df.filter(regex=r"split[0-9]+_").columns
+        df.drop(columns=splits, inplace=True)
+    if rank_index:
+        if "rank_test_score" not in df.columns:
+            raise RuntimeWarning("Could not set index to 'rank_test_score'")
+        else:
+            df.set_index("rank_test_score", drop=True, inplace=True)
+            df.sort_index(inplace=True)
+    elif "rank_test_score" in df.columns:
+            df.sort_values("rank_test_score", inplace=True)
+    if short_names:
+        df.columns = df.columns.str.split("__").map(itemgetter(-1))
+        df.columns = df.columns.str.replace("test_score", "score", regex=False)
+        if df.index.name is not None:
+            df.index.name = df.index.name.replace("test_score", "score")
+    return df
+
 
 class SmartCorrelatedSelection(SmartCorrelatedSelectionFE):
     """Wrapper for feature_engine.selection.SmartCorrelatedSelection."""
