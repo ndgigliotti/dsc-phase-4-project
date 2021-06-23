@@ -94,7 +94,7 @@ def sweep(
     aggressive_elimination: bool = False,
     **kwargs,
 ) -> str:
-    """Flexible parameter search function.
+    """Fit and pickle any Scikit-Learn search estimator.
 
     Fit and pickle a GridSearchCV, HalvingGridSearchCV, RandomizedSearchCV,
     or HalvingRandomSearchCV object. Immediately saving the search estimator

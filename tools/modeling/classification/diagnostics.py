@@ -4,7 +4,10 @@ from typing import Tuple, Union
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from numpy import ndarray
 from IPython.display import display
+from pandas.core.frame import DataFrame
+from pandas.core.series import Series
 from pandas.io.formats.style import Styler
 from sklearn.base import BaseEstimator
 from sklearn.metrics import average_precision_score, balanced_accuracy_score
@@ -311,16 +314,45 @@ def standard_report(
 
 def test_fit(
     estimator: Union[BaseEstimator, Pipeline],
-    X_train: Union[pd.DataFrame, np.ndarray],
-    X_test: Union[pd.DataFrame, np.ndarray],
-    y_train: Union[pd.DataFrame, np.ndarray],
-    y_test: Union[pd.Series, np.ndarray],
+    *,
+    X_train: Union[DataFrame, ndarray],
+    X_test: Union[DataFrame, ndarray],
+    y_train: Union[Series, ndarray],
+    y_test: Union[Series, ndarray],
     pos_label: Union[bool, int, float, str] = None,
     multi_class: str = "ovr",
     zero_division: str = "warn",
     size: Tuple[float, float] = (4, 4),
 ):
+    """Train and test, then show standard report.
+
+    Recommended: create a functools.partial object after
+    your train-test-split and plug in the data.
+
+    Parameters
+    ----------
+    estimator : Estimator or Pipeline
+        Classification estimator or pipeline ending with estimator.
+    X_train : DataFrame or ndarray
+        Independent variables training set.
+    X_test : DataFrame or ndarray
+        Independent variables test set.
+    y_train : Series or ndarray
+        Target variable training set.
+    y_test : Series or ndarray
+        Target variable test set.
+    pos_label : bool, int, float, or str, optional
+        Label of positive class, by default None.
+    multi_class : str, optional
+        Multi-class strategy, by default "ovr".
+    zero_division : str, optional
+        Action for zero-division, by default "warn".
+    size : tuple of floats, optional
+        Size of each diagnostic plot, by default (4, 4).
+    """
+
     estimator.fit(X_train, y_train)
+
     standard_report(
         estimator,
         X_test,
