@@ -17,6 +17,20 @@ def _validate_sort(sort):
     elif sort.lower() not in {"asc", "desc"}:
         raise ValueError("`sort` must be 'asc', 'desc', or None")
 
+def _validate_train_test_split(X_train, X_test, y_train, y_test):
+    assert X_train.shape[0] == y_train.shape[0]
+    assert X_test.shape[0] == y_test.shape[0]
+    if X_train.ndim > 1:
+        assert X_train.shape[1] == X_test.shape[1]
+    if y_train.ndim > 1:
+        assert y_train.shape[1] == y_test.shape[1]
+
+def _check_array_1dlike(array):
+    msg = "Array must be shape (n_samples,) or (n_samples, 1)."
+    if array.ndim == 2 and array.shape[1] > 1:
+        raise ValueError(msg)
+    elif array.ndim > 2:
+        raise ValueError(msg)
 
 def _check_if_tagged(docs: pd.Series):
     """Check if `docs` are POS tagged."""

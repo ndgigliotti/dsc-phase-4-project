@@ -4,8 +4,9 @@ from typing import Tuple, Union
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from numpy import ndarray
 from IPython.display import display
+from matplotlib.figure import Figure
+from numpy import ndarray
 from pandas.core.frame import DataFrame
 from pandas.core.series import Series
 from pandas.io.formats.style import Styler
@@ -20,11 +21,13 @@ from sklearn.metrics import (
 )
 from sklearn.pipeline import Pipeline
 
-from ...plotting import smart_subplots
+from ..._validation import _validate_train_test_split
+from ...plotting.utils import smart_subplots
+from ...typing import EstimatorLike, SeriesOrArray
 from ...utils import pandas_heatmap
 
 
-def _get_estimator_name(estimator: Union[BaseEstimator, Pipeline]) -> str:
+def _get_estimator_name(estimator: EstimatorLike) -> str:
     """Returns estimator class name.
 
     If a Pipeline is passed, returns the class name of the final estimator.
@@ -46,7 +49,7 @@ def _get_estimator_name(estimator: Union[BaseEstimator, Pipeline]) -> str:
     return name
 
 
-def high_correlations(data: pd.DataFrame, thresh: float = 0.75) -> pd.Series:
+def high_correlations(data: DataFrame, thresh: float = 0.75) -> Series:
     """Get non-trivial feature correlations at or above `thresh`.
 
     Parameters
@@ -69,11 +72,11 @@ def high_correlations(data: pd.DataFrame, thresh: float = 0.75) -> pd.Series:
 
 
 def classification_report(
-    y_test: Union[pd.Series, np.ndarray],
-    y_pred: np.ndarray,
+    y_test: SeriesOrArray,
+    y_pred: ndarray,
     zero_division: str = "warn",
     heatmap: bool = False,
-) -> Union[pd.DataFrame, Styler]:
+) -> Union[DataFrame, Styler]:
     """Return diagnostic report for classification, optionally styled as a heatmap.
 
     Parameters
@@ -92,12 +95,15 @@ def classification_report(
     DataFrame or Styler (if `heatmap = True`)
         Diagnostic report table.
     """
+    # Get unique labels
     labels = np.unique(np.hstack([y_test.flatten(), y_pred.flatten()]))
 
-    report = pd.DataFrame(
+    # Get Scikit-Learn report
+    report = DataFrame(
         sk_report(y_test, y_pred, output_dict=True, zero_division=zero_division)
     )
 
+    # Set column order
     order = report.columns.to_list()[: labels.size] + [
         "macro avg",
         "weighted avg",
@@ -105,33 +111,62 @@ def classification_report(
     ]
     report = report.loc[:, order]
 
+    # Normalize support
     support = report.loc["support"].iloc[: labels.size]
     support /= report.loc["support", "macro avg"]
     report.loc["support"] = support
 
+    # Calculate balanced accuracy
     report["bal accuracy"] = balanced_accuracy_score(y_test, y_pred)
+
+    # Mask extra cells
     mask = np.array([[0, 1, 1, 1], [0, 1, 1, 1]]).T.astype(np.bool_)
     report[["accuracy", "bal accuracy"]] = report.filter(like="accuracy", axis=1).mask(
         mask
     )
-
-    return (
-        pandas_heatmap(report, subset=labels, axis=1, vmin=0, vmax=1)
-        if heatmap
-        else report
-    )
+    if heatmap:
+        report = pandas_heatmap(report, subset=labels, axis=1, vmin=0, vmax=1)
+    return report
 
 
-def compare_scores(estimator_1, estimator_2, X_test, y_test, prec=3, heatmap=True):
-    scores_1 = classification_report(
-        y_test, estimator_1.predict(X_test), precision=prec
-    )
-    scores_2 = classification_report(
-        y_test, estimator_2.predict(X_test), precision=prec
-    )
+def compare_scores(
+    est_1: EstimatorLike,
+    est_2: EstimatorLike,
+    X_test: Union[DataFrame, Series, ndarray],
+    y_test: Union[Series, ndarray],
+    prec: int = 3,
+    heatmap: bool = True,
+) -> Union[DataFrame, Styler]:
+    """Compare the classification reports of two fitted estimators.
+
+    Parameters
+    ----------
+    est_1 : EstimatorLike
+        Fitted classifier or pipeline ending with classifier.
+    est_2 : EstimatorLike
+        Fitted classifier or pipeline ending with classifier.
+    X_test : DataFrame, Series, or ndarray
+        Independent variables test set.
+    y_test : Series or ndarray
+        Target variable test set.
+    prec : int, optional
+        Decimal places to show for floats, by default 3.
+    heatmap : bool, optional
+        Style result as a heatmap, by default True.
+
+    Returns
+    -------
+    Styler or DataFrame
+        Comparison table showing score differences.
+    """
+    # Get classification reports
+    scores_1 = classification_report(y_test, est_1.predict(X_test), precision=prec)
+    scores_2 = classification_report(y_test, est_2.predict(X_test), precision=prec)
+
+    # Create comparison table
     result = scores_1.compare(scores_2, keep_equal=True, keep_shape=True)
-    name_1 = _get_estimator_name(estimator_1)
-    name_2 = _get_estimator_name(estimator_2)
+    name_1 = _get_estimator_name(est_1)
+    name_2 = _get_estimator_name(est_2)
     result.rename(columns=dict(self=name_1, other=name_2), inplace=True)
     result = result.T
     return pandas_heatmap(result) if heatmap else result
@@ -139,13 +174,12 @@ def compare_scores(estimator_1, estimator_2, X_test, y_test, prec=3, heatmap=Tru
 
 def classification_plots(
     estimator: Union[BaseEstimator, Pipeline],
-    X_test: Union[pd.DataFrame, np.ndarray],
-    y_test: Union[pd.Series, np.ndarray],
+    X_test: Union[DataFrame, ndarray],
+    y_test: Union[Series, ndarray],
     pos_label: Union[bool, int, float, str] = None,
-    multi_class: str = "ovr",
     average: str = "macro",
     size: Tuple[float, float] = (5, 5),
-) -> plt.Figure:
+) -> Figure:
     """Plot confusion matrix, ROC curve, and precision-recall curve.
 
     Parameters
@@ -167,35 +201,51 @@ def classification_plots(
     Figure
         Figure containing three subplots.
     """
-    labels = np.unique(y_test.flatten())
+
+    # Validate shapes
+    assert X_test.shape[0] == y_test.shape[0]
+
+    labels = estimator.classes_
+    if pos_label is None:
+        # Default positive class
+        pos_label = labels[-1]
     if labels.size > 2:
+        # One subplot for multi-class
         fig, ax1 = plt.subplots(figsize=size)
     else:
+        # Three subplots for binary
         fig, (ax1, ax2, ax3) = smart_subplots(nplots=3, ncols=3, size=size)
-        plot_roc_curve(estimator, X_test, y_test, pos_label=pos_label, ax=ax2)
+        plot_roc_curve(
+            estimator,
+            X_test,
+            y_test,
+            pos_label=pos_label,
+            ax=ax2,
+        )
         plot_precision_recall_curve(
             estimator, X_test, y_test, pos_label=pos_label, ax=ax3
         )
+
+        # Draw dummy lines for comparison
         baseline_style = dict(lw=2, linestyle=":", color="r", alpha=1)
         ax2.plot([0, 1], [0, 1], **baseline_style)
         ax3.plot([0, 1], [y_test.mean()] * 2, **baseline_style)
         ax3.plot([0, 0], [y_test.mean(), 1], **baseline_style)
+
+        # Get predictions for calculating scores
         try:
             y_score = estimator.predict_proba(X_test)[:, pos_label]
         except AttributeError:
             y_score = estimator.decision_function(X_test)
-        auc_score = roc_auc_score(
-            y_test, y_score, average=average, multi_class=multi_class
-        ).round(2)
-        ap_score = average_precision_score(
-            y_test, y_score, average=average, multi_class=multi_class
-        ).round(2)
+        auc_score = roc_auc_score(y_test, y_score, average=average).round(2)
+        ap_score = average_precision_score(y_test, y_score, average=average).round(2)
 
         ax2.set_title(f"Receiver Operating Characteristic Curve: AUC = {auc_score}")
         ax3.set_title(f"Precision-Recall Curve: AP = {ap_score}")
         ax2.get_legend().set_visible(False)
         ax3.get_legend().set_visible(False)
 
+    # For both binary and multi-class
     plot_confusion_matrix(
         estimator,
         X_test,
@@ -207,6 +257,8 @@ def classification_plots(
     )
 
     ax1.set_title("Normalized Confusion Matrix")
+
+    # Hide disruptive grid
     ax1.grid(False)
     fig.tight_layout()
 
@@ -314,7 +366,6 @@ def standard_report(
 
 def test_fit(
     estimator: Union[BaseEstimator, Pipeline],
-    *,
     X_train: Union[DataFrame, ndarray],
     X_test: Union[DataFrame, ndarray],
     y_train: Union[Series, ndarray],
@@ -350,6 +401,8 @@ def test_fit(
     size : tuple of floats, optional
         Size of each diagnostic plot, by default (4, 4).
     """
+    # Check data shapes
+    _validate_train_test_split(X_train, X_test, y_train, y_test)
 
     estimator.fit(X_train, y_train)
 

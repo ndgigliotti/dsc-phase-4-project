@@ -3,12 +3,16 @@ import re
 import string
 from functools import partial, singledispatch
 from operator import itemgetter
-from typing import Callable, DefaultDict, List, Sequence, Tuple, Union, cast
+from typing import Callable, List, Sequence, Tuple, Union
 
 import gensim.parsing.preprocessing as gsp
 import nltk
 import numpy as np
+from numpy import ndarray
+from numpy.lib.arraysetops import isin
 from pandas.core.dtypes.inference import is_nested_list_like
+from pandas.core.frame import DataFrame
+from pandas.core.series import Series
 from scipy.sparse import csr_matrix
 import pandas as pd
 from pandas.api.types import is_list_like
@@ -23,7 +27,7 @@ from nltk.tokenize import casual
 from os.path import normpath
 from .typing import RandomSeed, ListLike, StrOrPattern
 from . import utils
-from ._validation import _check_if_tagged
+from ._validation import _check_if_tagged, _check_array_1dlike
 from gensim.models.doc2vec import TaggedDocument
 
 TREEBANK_TAGS = frozenset(
@@ -67,122 +71,360 @@ TREEBANK_TAGS = frozenset(
     }
 )
 
+# Most filter functions here rely on the generic function `_process`.
+# This allows them to easily handle a wide variety of input types.
+
 
 @singledispatch
-def _process(docs: list, func: Callable):
+def _process(docs: Union[str, ListLike], func: Callable) -> Union[str, ListLike]:
+    """Apply `func` to string or strings.
+
+    Parameters
+    ----------
+    docs : str or list, Series, ndarray of str
+        Document(s) to map `func` over. Accepts arrays of shape
+        (n_samples,) or (n_samples, 1).
+
+    func : Callable
+        Callable for processing `docs`.
+
+    Returns
+    -------
+    str or list, Series, ndarray of str
+        Processed string(s), same type as input.
+    """
+    # This is the fallback dispatch
+    # Try coercing novel sequence to list
+    if isinstance(docs, Sequence):
+        docs = _process(list(docs), func)
+    else:
+        raise TypeError(f"Expected str or list-like of str, got {type(docs)}")
+    return docs
+
+
+@_process.register
+def _(docs: list, func: Callable) -> list:
+    """Dispatch for list"""
     return list(map(func, docs))
 
 
 @_process.register
-def _(docs: pd.Series, func: Callable):
+def _(docs: Series, func: Callable) -> Series:
+    """Dispatch for Series"""
     return docs.map(func)
 
 
 @_process.register
-def _(docs: np.ndarray, func: Callable):
+def _(docs: ndarray, func: Callable) -> ndarray:
+    """Dispatch for ndarray"""
+    # Check that shape is (n_samples,) or (n_samples, 1)
+    _check_array_1dlike(docs)
+
+    # Map over flat array
     return utils.flat_map(func, docs)
 
 
 @_process.register
-def _(docs: str, func: Callable):
+def _(docs: str, func: Callable) -> str:
+    """Dispatch for single string"""
     return func(docs)
 
 
-def lowercase(docs: Union[str, ListLike]):
+def lowercase(docs: Union[str, ListLike]) -> Union[str, ListLike]:
+    """Convenience function to make letters lowercase.
+
+    Parameters
+    ----------
+    docs : str or list-like of str
+        Document(s) to make lowercase.
+
+    Returns
+    -------
+    str or list-like of str
+        Lowercase document(s).
+    """
+
     def lower(x):
         return x.lower()
 
     return _process(docs, lower)
 
 
-def strip_short(docs: Union[str, ListLike]):
+def strip_short(docs: Union[str, ListLike]) -> Union[str, ListLike]:
+    """Remove words of less than 3 characters.
+
+    Thin layer over gensim.parsing.preprocessing.strip_short.
+
+    Parameters
+    ----------
+    docs : str or list-like of str
+        Document(s) to process.
+
+    Returns
+    -------
+    str or list-like of str
+        Processed document(s).
+    """
     return _process(docs, gsp.strip_short)
 
 
-def strip_multiwhite(docs: Union[str, ListLike]):
+def strip_multiwhite(docs: Union[str, ListLike]) -> Union[str, ListLike]:
+    """Replace stretches of whitespace with a single space.
+
+    Thin layer over gensim.parsing.preprocessing.strip_multiple_whitespaces.
+
+    Parameters
+    ----------
+    docs : str or list-like of str
+        Document(s) to process.
+
+    Returns
+    -------
+    str or list-like of str
+        Processed document(s).
+    """
     return _process(docs, gsp.strip_multiple_whitespaces)
 
 
-def strip_numeric(docs: Union[str, ListLike]):
+def strip_numeric(docs: Union[str, ListLike]) -> Union[str, ListLike]:
+    """Remove numeric characters.
+
+    Thin layer over gensim.parsing.preprocessing.strip_numeric.
+
+    Parameters
+    ----------
+    docs : str or list-like of str
+        Document(s) to process.
+
+    Returns
+    -------
+    str or list-like of str
+        Processed document(s).
+    """
     return _process(docs, gsp.strip_numeric)
 
 
-def strip_non_alphanum(docs: Union[str, ListLike]):
+def strip_non_alphanum(docs: Union[str, ListLike]) -> Union[str, ListLike]:
+    """Remove all non-alphanumeric characters.
+
+    Thin layer over gensim.parsing.preprocessing.strip_non_alphanum.
+
+    Parameters
+    ----------
+    docs : str or list-like of str
+        Document(s) to process.
+
+    Returns
+    -------
+    str or list-like of str
+        Processed document(s).
+    """
     return _process(docs, gsp.strip_non_alphanum)
 
 
-def split_alphanum(docs: Union[str, ListLike]):
+def split_alphanum(docs: Union[str, ListLike]) -> Union[str, ListLike]:
+    """Split up the letters and numerals in alphanumeric sequences.
+
+    Thin layer over gensim.parsing.preprocessing.split_alphanum.
+
+    Parameters
+    ----------
+    docs : str or list-like of str
+        Document(s) to process.
+
+    Returns
+    -------
+    str or list-like of str
+        Processed document(s).
+    """
     return _process(docs, gsp.split_alphanum)
 
 
-def limit_repeats(docs: Union[str, ListLike]):
+def limit_repeats(docs: Union[str, ListLike]) -> Union[str, ListLike]:
+    """Limit strings of repeating characters (e.g. 'aaaaa') to length 3.
+
+    Thin layer over nltk.tokenize.casual.reduce_lengthening. This is
+    the function used by TweetTokenizer if `reduce_len=True`.
+
+    Parameters
+    ----------
+    docs : str or list-like of str
+        Document(s) to process.
+
+    Returns
+    -------
+    str or list-like of str
+        Processed document(s).
+    """
     return _process(docs, casual.reduce_lengthening)
 
 
-def strip_tags(docs: Union[str, ListLike]):
+def strip_tags(docs: Union[str, ListLike]) -> Union[str, ListLike]:
+    """Remove HTML tags.
+
+    Thin layer over gensim.parsing.preprocessing.strip_tags.
+
+    Parameters
+    ----------
+    docs : str or list-like of str
+        Document(s) to process.
+
+    Returns
+    -------
+    str or list-like of str
+        Processed document(s).
+    """
     return _process(docs, gsp.strip_tags)
 
 
-def stem_text(docs: Union[str, ListLike]):
+def stem_text(docs: Union[str, ListLike]) -> Union[str, ListLike]:
+    """Apply Porter stemming to text.
+
+    Thin layer over gensim.parsing.preprocessing.stem_text.
+
+    Parameters
+    ----------
+    docs : str or list-like of str
+        Document(s) to process.
+
+    Returns
+    -------
+    str or list-like of str
+        Processed document(s).
+    """
     return _process(docs, gsp.stem_text)
 
 
-def strip_handles(docs: Union[str, ListLike]):
+def strip_handles(docs: Union[str, ListLike]) -> Union[str, ListLike]:
+    """Remove Twitter @mentions or other similar handles.
+
+    Thin layer over nltk.tokenize.casual.remove_handles. This is
+    the function used by TweetTokenizer if `strip_handles=True`.
+
+    Parameters
+    ----------
+    docs : str or list-like of str
+        Document(s) to process.
+
+    Returns
+    -------
+    str or list-like of str
+        Processed document(s).
+    """
     return _process(docs, casual.remove_handles)
 
 
-def uni2ascii(docs: Union[str, ListLike]):
+def uni2ascii(docs: Union[str, ListLike]) -> Union[str, ListLike]:
+    """Translate Unicode to ASCII in a highly readable way.
+
+    Thin layer over unidecode.unidecode.
+
+    Parameters
+    ----------
+    docs : str or list-like of str
+        Document(s) to process.
+
+    Returns
+    -------
+    str or list-like of str
+        Processed document(s).
+    """
     return _process(docs, unidecode)
 
 
-def _compile_punct(punct, exclude):
+def strip_punct(
+    docs: Union[str, ListLike],
+    repl: str = " ",
+    punct: str = string.punctuation,
+    exclude: str = "",
+) -> Union[str, ListLike]:
+    """Strip punctuation, optionally excluding some characters.
+
+    Extension of gensim.parsing.preprocessing.strip_punctuation.
+
+    Parameters
+    ----------
+    docs : str or list-like of str
+        Document(s) to process.
+    repl : str, optional
+        Replacement character, by default " ".
+    punct : str, optional
+        String of punctuation symbols, by default `string.punctuation`.
+    exclude : str, optional
+        String of symbols to exclude, empty by default.
+
+    Returns
+    -------
+    str or list-like of str
+        Processed document(s).
+    """
     if exclude:
         punct = re.sub(fr"[{exclude}]", "", punct)
-    return re.compile(fr"[{re.escape(punct)}]")
+    re_punct = re.compile(fr"[{re.escape(punct)}]")
+
+    def sub(string):
+        return re_punct.sub(repl, string)
+
+    return _process(docs, sub)
 
 
-@singledispatch
-def strip_punct(docs: pd.Series, repl=" ", punct=string.punctuation, exclude=""):
-    re_punct = _compile_punct(punct, exclude)
-    return docs.str.replace(re_punct, repl, regex=True)
+def chain_filts(
+    docs: Union[str, ListLike], filts: List[Callable]
+) -> Union[str, ListLike]:
+    """Apply a list of filters to docs.
 
+    Extension of gensim.parsing.preprocessing.strip_punctuation.
 
-@strip_punct.register
-def _(docs: np.ndarray, repl=" ", punct=string.punctuation, exclude=""):
-    re_punct = _compile_punct(punct, exclude)
-    docs = utils.flat_map(re_punct.sub, docs, repl)
-    return docs
+    Parameters
+    ----------
+    docs : str or list-like of str
+        Document(s) to process.
+    filts : list
+        List of callable filters to apply elementwise to docs.
 
-
-@strip_punct.register
-def _(docs: list, repl=" ", punct=string.punctuation, exclude=""):
-    re_punct = _compile_punct(punct, exclude)
-    return [re_punct.sub(repl, x) for x in docs]
-
-
-@strip_punct.register
-def _(docs: str, repl=" ", punct=string.punctuation, exclude=""):
-    re_punct = _compile_punct(punct, exclude)
-    return re_punct.sub(repl, docs)
-
-
-def chain_filts(docs: Union[str, ListLike], filts: list):
+    Returns
+    -------
+    str or list-like of str
+        Processed document(s).
+    """
     for filt in filts:
         docs = _process(docs, filt)
     return docs
 
 
-def readable_sample(
-    data: pd.Series, n: int = 10, random_state: RandomSeed = None
-) -> None:
-    if isinstance(data, pd.DataFrame):
+def readable_sample(data: Series, n: int = 10, random_state: RandomSeed = None) -> None:
+    """Display readable sample of text from `data`.
+
+    Parameters
+    ----------
+    data : Series of str
+        Series of strings to sample.
+    n : int, optional
+        Sample size, by default 10
+    random_state : RandomSeed, optional
+        Seed for pseudorandom number generator, by default None.
+    """
+    if isinstance(data, DataFrame):
         raise ValueError(f"Expected Series, got {type(data)}")
     data = data.sample(n=n, random_state=random_state)
     display(Markdown(data.to_markdown()))
 
 
-def treebank2wordnet(pos):
-    """Inspired by https://stackoverflow.com/questions/15586721"""
+def treebank2wordnet(pos: str) -> str:
+    """Translate Treebank POS tag to Wordnet.
+
+    Inspired by https://stackoverflow.com/questions/15586721
+
+    Parameters
+    ----------
+    pos : str
+        Treebank part of speech tag.
+
+    Returns
+    -------
+    str
+        Wordnet POS tag.
+    """
     wordnet_pos = dict(
         J=wordnet.ADJ,
         V=wordnet.VERB,
@@ -192,25 +434,78 @@ def treebank2wordnet(pos):
     return wordnet_pos.get(pos[0].upper(), wordnet.NOUN)
 
 
-def space_tokenize(docs: Union[str, ListLike]):
+def space_tokenize(docs: Union[str, ListLike]) -> Union[List[str], ListLike]:
+    """Convenience function to tokenize by whitespace.
+
+    Uses regex to split on any whitespace character.
+
+    Parameters
+    ----------
+    docs : str or list-like of str
+        Document(s) to tokenize.
+
+    Returns
+    -------
+    list of str or list-like of lists of str
+        Tokenized document(s).
+    """
     re_white = re.compile(r"\s+")
     return _process(docs, re_white.split)
 
 
-def tokenize_tag(docs: Union[str, ListLike], tokenizer: Callable = None):
+def tokenize_tag(
+    docs: Union[str, ListLike], tokenizer: Callable = None
+) -> Union[List[Tuple[str, str]], ListLike]:
+    """Tokenize and POS-tag documents.
+
+    Parameters
+    ----------
+    docs : str or list-like of str
+        Document(s) to tokenize and tag.
+    tokenizer: callable
+        Callable to apply to documents. Defaults to
+        `space_tokenize` if unspecified.
+
+    Returns
+    -------
+    list of tuples of str or nested list-like
+        Tokenized and tagged document(s).
+    """
     input_type = type(docs)
     if tokenizer is None:
         docs = space_tokenize(docs)
     else:
         docs = _process(docs, tokenizer)
+
+    # If input was single string, list of tokens
+    # will confuse the `_process` dispatcher. Need
+    # to handle the single string case directly.
     if input_type is str:
         docs = nltk.pos_tag(docs)
     else:
+        # Feed any other input type into `_process`.
         docs = _process(docs, nltk.pos_tag)
     return docs
 
 
-def tokenize_stem(docs: Union[str, ListLike], tokenizer: Callable = None):
+def tokenize_stem(
+    docs: Union[str, ListLike], tokenizer: Callable = None
+) -> Union[List[str], ListLike]:
+    """Tokenize and Porter stem documents.
+
+    Parameters
+    ----------
+    docs : str or list-like of str
+        Document(s) to tokenize and stem.
+    tokenizer: callable
+        Callable to apply to documents. Defaults to
+        `space_tokenize` if unspecified.
+
+    Returns
+    -------
+    list of str or list-like of lists of str
+        Tokenized document(s).
+    """
     if tokenizer is None:
         docs = space_tokenize(docs)
     else:
@@ -221,8 +516,20 @@ def tokenize_stem(docs: Union[str, ListLike], tokenizer: Callable = None):
 
 @singledispatch
 def wordnet_lemmatize(
-    docs: pd.Series, tokenizer: Callable = None, as_tokens: bool = False
-):
+    docs: Union[str, ListLike], tokenizer: Callable = None, as_tokens: bool = False
+) -> Union[str, List[str], ListLike]:
+    # This is the fallback dispatch
+    # Try coercing novel sequence to Series
+    if isinstance(docs, Sequence):
+        docs = Series(list(docs))
+        docs = wordnet_lemmatize(docs, tokenizer=tokenizer, as_tokens=as_tokens)
+    else:
+        raise TypeError(f"Expected str or list-like of str, got {type(docs)}")
+    return docs
+
+
+@wordnet_lemmatize.register
+def _(docs: Series, tokenizer: Callable = None, as_tokens: bool = False):
     # Tokenize and tag POS
     docs = tokenize_tag(docs, tokenizer=tokenizer)
 
@@ -243,7 +550,7 @@ def wordnet_lemmatize(
 
 
 @wordnet_lemmatize.register
-def _(docs: np.ndarray, tokenizer: Callable = None, as_tokens: bool = False):
+def _(docs: ndarray, tokenizer: Callable = None, as_tokens: bool = False):
     shape = docs.shape
     docs = wordnet_lemmatize(
         pd.Series(docs.flat), tokenizer=tokenizer, as_tokens=as_tokens
