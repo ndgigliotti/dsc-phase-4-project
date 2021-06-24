@@ -13,13 +13,13 @@ from .utils import smart_subplots
 
 @singledispatch
 def wordcloud(
-    word_scores: Series,
+    word_scores: Union[Series, DataFrame],
     *,
     cmap: Union[str, List[str], Dict[str, str]] = "Greys",
     size: Tuple[float, float] = (5, 3),
     ncols: int = 3,
     ax: Axes = None,
-    **kwargs
+    **kwargs,
 ) -> Axes:
     """Plot wordcloud(s) from word frequencies or scores.
 
@@ -43,6 +43,21 @@ def wordcloud(
         Axes of single wordcloud of Figure of multiple wordclouds.
         Returns Axes if `word_scores` is Series, Figure if a DataFrame.
     """
+    # This is the dispatch if `word_scores` is neither Series nor DataFrame.
+    raise TypeError(f"Expected Series or DataFrame, got {type(word_scores)}")
+
+
+@wordcloud.register
+def _(
+    word_scores: Series,
+    *,
+    cmap: Union[str, List[str], Dict[str, str]] = "Greys",
+    size: Tuple[float, float] = (5, 3),
+    ncols: int = 3,
+    ax: Axes = None,
+    **kwargs,
+) -> Axes:
+    """Dispatch for Series. Returns single Axes with wordcloud."""
     # Create new Axes if none received
     if ax is None:
         _, ax = plt.subplots(figsize=size)
@@ -79,7 +94,7 @@ def _(
     size: Tuple[float, float] = (5, 3),
     ncols: int = 3,
     ax: Axes = None,
-    **kwargs
+    **kwargs,
 ) -> Figure:
     """Dispatch for DataFrames. Plots each column on a subplot."""
     if ax is not None:
