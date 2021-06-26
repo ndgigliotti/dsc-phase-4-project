@@ -1,9 +1,10 @@
 from typing import Iterable
 import numpy as np
+from numpy.lib.arraysetops import isin
 import pandas as pd
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.pipeline import Pipeline
-
+from pandas.core.generic import NDFrame
 
 def _validate_orient(orient):
     if orient.lower() not in {"h", "v"}:
@@ -26,11 +27,11 @@ def _validate_train_test_split(X_train, X_test, y_train, y_test):
         assert y_train.shape[1] == y_test.shape[1]
 
 
-def _check_array_1dlike(array):
-    msg = "Array must be shape (n_samples,) or (n_samples, 1)."
-    if array.ndim == 2 and array.shape[1] > 1:
+def _check_1dlike(data):
+    msg = "Data must be shape (n_samples,) or (n_samples, 1)."
+    if data.ndim == 2 and data.shape[1] > 1:
         raise ValueError(msg)
-    elif array.ndim > 2:
+    elif data.ndim > 2:
         raise ValueError(msg)
 
 
@@ -44,9 +45,13 @@ def _validate_transformer(obj):
         raise TypeError("Transformer must be Sklearn transformer or Pipeline")
 
 
-def _validate_raw_docs(X: Iterable):
-    if isinstance(X, str):
-        raise TypeError("Expected iterable over raw documents, string object received.")
+def _validate_raw_docs(X: Iterable[str]):
+    if not isinstance(X, Iterable) or isinstance(X, str):
+        raise TypeError(f"Expected iterable over raw documents, {type(X)} object received.")
+    if isinstance(X, (np.ndarray, NDFrame)):
+        _check_1dlike(X)
+
+
     if isinstance(X, np.ndarray) and X.ndim > 1:
         raise ValueError(
             f"Expected iterable over raw documents, received {X.ndim}darray"

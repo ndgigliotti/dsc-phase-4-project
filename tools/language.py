@@ -17,13 +17,14 @@ from typing import (
 
 import gensim.parsing.preprocessing as gsp
 import nltk
+import numpy as np
 import pandas as pd
 from fuzzywuzzy.fuzz import WRatio as weighted_ratio
 from fuzzywuzzy.process import extractOne as extract_one
 from IPython.core.display import Markdown, display
 from nltk.corpus import wordnet
 from nltk.stem.wordnet import WordNetLemmatizer
-from nltk.tokenize import casual
+from nltk.tokenize import casual, sexpr
 from numpy import ndarray
 from pandas._typing import AnyArrayLike
 from pandas.core.frame import DataFrame
@@ -32,7 +33,7 @@ from scipy.sparse import csr_matrix
 from unidecode import unidecode
 
 from . import utils
-from ._validation import _check_array_1dlike
+from ._validation import _check_1dlike
 from .typing import (
     CallableOnStr,
     Documents,
@@ -90,7 +91,7 @@ def _(docs: Series, func: CallableOnStr) -> Series:
 def _(docs: ndarray, func: CallableOnStr) -> ndarray:
     """Dispatch for ndarray"""
     # Check that shape is (n_samples,) or (n_samples, 1)
-    _check_array_1dlike(docs)
+    _check_1dlike(docs)
 
     # Map over flat array
     return utils.flat_map(func, docs)
@@ -425,38 +426,130 @@ def space_tokenize(docs: Documents) -> TokenList:
     return _process(docs, re_white.split)
 
 
+@singledispatch
 def tokenize_tag(
     docs: Documents,
     tokenizer: Tokenizer = space_tokenize,
-) -> Union[TaggedTokenList, Collection[TaggedTokenList]]:
+    fuse_tuples: bool = False,
+    sep: str = "/",
+) -> Union[
+    TaggedTokenList, TokenList, Collection[TaggedTokenList], Collection[TokenList]
+]:
     """Tokenize and POS-tag documents.
 
     Parameters
     ----------
     docs : str or iterable of str
         Document(s) to tokenize and tag.
-    tokenizer: callable
+    tokenizer: callable, optional
         Callable to apply to documents. Defaults to
-        `space_tokenize` if unspecified.
+        `space_tokenize`.
+    fuse_tuples: bool, optional
+        Join tuples (word, tag) into single strings using
+        separator `sep`. False by default.
+    sep: str, optional
+        Separator string for joining (word, tag) tuples. Only
+        relevant if `fuse_tuples=True`
 
     Returns
     -------
-    list of tuples of str or nested iterable
+    list of tuples of str, list of str, collection of list of tuples of str,
+    or collection of list of str
         Tokenized and tagged document(s).
     """
-    input_type = type(docs)
-    docs = _process(docs, tokenizer)
-
-    # If input was single string, list of tokens
-    # will confuse the `_process` dispatcher into
-    # trying to tag each token individually. Need
-    # to handle the singular case directly.
-    if input_type is str:
-        docs = nltk.pos_tag(docs)
+    # This is the fallback dispatch.
+    # Try coercing novel iterable to list.
+    if isinstance(docs, Iterable):
+        docs = tokenize_tag(
+            list(docs), tokenizer=tokenizer, fuse_tuples=fuse_tuples, sep=sep
+        )
     else:
-        # Feed everything else into `_process`.
-        docs = _process(docs, nltk.pos_tag)
+        raise TypeError(f"Expected str or iterable of str, got {type(docs)}")
     return docs
+
+
+@tokenize_tag.register
+def _(
+    docs: str,
+    tokenizer: Tokenizer = space_tokenize,
+    fuse_tuples: bool = False,
+    sep: str = "/",
+) -> Union[TaggedTokenList, TokenList]:
+    """Dispatch for str (singular)."""
+    # Tokenize and tag
+    docs = tokenizer(docs)
+    docs = nltk.pos_tag(docs)
+
+    if fuse_tuples:
+        # Fuse tuples
+        docs = [nltk.tuple2str(x, sep) for x in docs]
+    return docs
+
+
+@tokenize_tag.register
+def _(
+    docs: list,
+    tokenizer: Tokenizer = space_tokenize,
+    fuse_tuples: bool = False,
+    sep: str = "/",
+) -> Union[List[TaggedTokenList], List[TokenList]]:
+    """Dispatch for list."""
+    # Tokenize
+    docs = list(map(tokenizer, docs))
+
+    # Tag as "sentences", which is equivalent to nltk.pos_tag,
+    # but more efficient for a list of documents.
+    docs = nltk.pos_tag_sents(docs)
+
+    if fuse_tuples:
+        # Fuse tuples
+        for i, doc in enumerate(docs):
+            docs[i] = [nltk.tuple2str(x, sep=sep) for x in doc]
+    return docs
+
+
+@tokenize_tag.register
+def _(
+    docs: Series,
+    tokenizer: Tokenizer = space_tokenize,
+    fuse_tuples: bool = False,
+    sep: str = "/",
+) -> Series:
+    """Dispatch for Series."""
+    # Process as list
+    values = tokenize_tag(
+        docs.to_list(),
+        tokenizer=tokenizer,
+        fuse_tuples=fuse_tuples,
+        sep=sep,
+    )
+
+    # Reconstruct Series
+    return Series(data=values, index=docs.index, name=docs.name)
+
+
+@tokenize_tag.register
+def _(
+    docs: ndarray,
+    tokenizer: Tokenizer = space_tokenize,
+    fuse_tuples: bool = False,
+    sep: str = "/",
+) -> ndarray:
+    """Dispatch for ndarray."""
+    # Make sure shape is (n_samples,) or (n_samples, 1)
+    _check_1dlike(docs)
+    shape = docs.shape
+
+    # Process as list
+    docs = tokenize_tag(
+        docs.squeeze().tolist(),
+        tokenizer=tokenizer,
+        fuse_tuples=fuse_tuples,
+        sep=sep,
+    )
+
+    # Reconstruct array
+    return np.array(docs, dtype=object).reshape(shape)
 
 
 def tokenize_stem(

@@ -20,7 +20,7 @@ def wordcloud(
     ncols: int = 3,
     ax: Axes = None,
     **kwargs,
-) -> Axes:
+) -> Union[Axes, Figure]:
     """Plot wordcloud(s) from word frequencies or scores.
 
     Parameters
@@ -51,7 +51,7 @@ def wordcloud(
 def _(
     word_scores: Series,
     *,
-    cmap: Union[str, List[str], Dict[str, str]] = "Greys",
+    cmap: str = "Greys",
     size: Tuple[float, float] = (5, 3),
     ncols: int = 3,
     ax: Axes = None,

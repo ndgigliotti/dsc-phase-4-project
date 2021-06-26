@@ -332,7 +332,6 @@ def standard_report(
     X_test: Union[pd.DataFrame, np.ndarray],
     y_test: Union[pd.Series, np.ndarray],
     pos_label: Union[bool, int, float, str] = None,
-    multi_class: str = "ovr",
     zero_division: str = "warn",
     size: Tuple[float, float] = (4, 4),
     heatmap: bool = True,
@@ -358,7 +357,6 @@ def standard_report(
         X_test,
         y_test,
         pos_label=pos_label,
-        multi_class=multi_class,
         size=size,
     )
     display(table)
@@ -371,7 +369,6 @@ def test_fit(
     y_train: Union[Series, ndarray],
     y_test: Union[Series, ndarray],
     pos_label: Union[bool, int, float, str] = None,
-    multi_class: str = "ovr",
     zero_division: str = "warn",
     size: Tuple[float, float] = (4, 4),
 ):
@@ -394,8 +391,6 @@ def test_fit(
         Target variable test set.
     pos_label : bool, int, float, or str, optional
         Label of positive class, by default None.
-    multi_class : str, optional
-        Multi-class strategy, by default "ovr".
     zero_division : str, optional
         Action for zero-division, by default "warn".
     size : tuple of floats, optional
@@ -403,7 +398,7 @@ def test_fit(
     """
     # Check data shapes
     _validate_train_test_split(X_train, X_test, y_train, y_test)
-
+    
     estimator.fit(X_train, y_train)
 
     standard_report(
@@ -411,7 +406,6 @@ def test_fit(
         X_test,
         y_test,
         pos_label=pos_label,
-        multi_class=multi_class,
         zero_division=zero_division,
         size=size,
     )

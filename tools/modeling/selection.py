@@ -244,7 +244,7 @@ def load_results(
         Table of cross validation results.
     """
     # Load search estimator
-    if ".joblib" in path:
+    if ".joblib" not in path:
         path = f"{path}.joblib"
     search = joblib.load(os.path.normpath(path))
 
