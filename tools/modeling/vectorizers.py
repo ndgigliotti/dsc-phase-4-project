@@ -13,7 +13,7 @@ from sklearn.preprocessing import FunctionTransformer, Normalizer, Binarizer
 from sklearn.utils.validation import check_is_fitted
 from .._validation import _validate_raw_docs
 from scipy.sparse import csr_matrix
-
+from ..typing import CallableOnStr
 
 class TokenizingVectorizer(TransformerMixin, _VectorizerMixin, BaseEstimator):
     """Vectorizer base class with the standard Scikit-Learn pre/post processing.
@@ -240,14 +240,29 @@ class Doc2Vectorizer(TokenizingVectorizer):
 
 
 class VaderVectorizer(BaseEstimator, TransformerMixin):
-    """Experimental vectorizer which extracts VADER polarity scores."""
+    """Extracts VADER polarity scores from short documents.
 
+        Parameters
+        ----------
+        sign_only : bool, optional
+            Convert vector elements to sign indicators -1.0, 0.0, and 1.0. By default False.
+        compound_only : bool, optional
+            Make vectors with only the compound score, by default False.
+        category_only : bool, optional
+            Make vectors with only the positive, neutral, and negative scores, by default False.
+        preprocessor : CallableOnStr, optional
+            Callable for preprocessing text before VADER analysis, by default None.
+        norm : str, optional
+            Normalization to apply, by default "l2".
+        sparse : bool, optional
+            Output a sparse matrix, by default True.
+        """
     def __init__(
         self,
         sign_only=False,
         compound_only=False,
         category_only=False,
-        preprocessor=None,
+        preprocessor:CallableOnStr=None,
         norm="l2",
         sparse=True,
     ):
@@ -259,6 +274,7 @@ class VaderVectorizer(BaseEstimator, TransformerMixin):
         self.sparse = sparse
 
     def build_post_pipe(self):
+        """Construct postprocessing pipeline based on parameters."""
         post_pipe = Pipeline([("sign", None), ("norm", None), ("spar", None)])
         if self.sign_only:
             post_pipe.set_params(sign=FunctionTransformer(np.sign))
@@ -269,6 +285,7 @@ class VaderVectorizer(BaseEstimator, TransformerMixin):
         return post_pipe
 
     def _validate_params(self):
+        """Validate some parameters."""
         if self.category_only and self.compound_only:
             raise ValueError(
                 "Incompatible: `compound_only=True` and `category_only=True`."
@@ -280,35 +297,45 @@ class VaderVectorizer(BaseEstimator, TransformerMixin):
                 )
 
     def get_feature_names(self):
+        """Return list of feature names"""
         return self.feature_names_
 
     def fit(self, X, y=None):
+        """Does nothing except validate parameters and save feature names."""
         self._validate_params()
         _validate_raw_docs(X)
+        self.feature_names_ = ["vader_neg", "vader_neu", "vader_pos", "vader_comp"]
         if self.compound_only:
-            self.feature_names_ = ["compound"]
-        else:
-            self.feature_names_ = ["neg", "neu", "pos", "compound"]
+            self.feature_names_ = self.feature_names_[-1:]
+        elif self.category_only:
+            self.feature_names_ = self.feature_names_[:-1]
         return self
 
     def transform(self, X):
+        """Extracts the polarity scores and applies postprocessing."""
+        # Input and param validation
         self._validate_params()
         _validate_raw_docs(X)
+
+        # Squeeze pseudo-1d structures into a list
         if isinstance(X, (np.ndarray, pd.Series, pd.DataFrame)):
             X = X.squeeze().tolist()
+
+        # Apply preprocessing
         docs = X
         if self.preprocessor is not None:
             docs = self.preprocessor(docs)
+        
+        # Perform VADER analysis
         sia = SentimentIntensityAnalyzer()
-        vecs = []
-        for doc in docs:
-            vec = pd.Series(sia.polarity_scores(doc))
-            vecs.append(vec)
-        vecs = pd.DataFrame(vecs)
+        vecs = [pd.Series(sia.polarity_scores(x)) for x in docs]
+        vecs = pd.DataFrame(vecs).add_prefix("vader_")
         if self.compound_only:
-            vecs = vecs.loc[:, ["compound"]]
+            vecs = vecs.loc[:, ["comp"]]
         if self.category_only:
             vecs = vecs.loc[:, ["neg", "neu", "pos"]]
         self.feature_names_ = vecs.columns.to_list()
+
+        # Apply postprocessing and return
         post_pipe = self.build_post_pipe()
         return post_pipe.fit_transform(vecs.to_numpy())
