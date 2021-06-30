@@ -1,8 +1,9 @@
 import itertools
 import re
 import string
-from functools import partial, singledispatch
+from functools import lru_cache, partial, singledispatch, wraps
 from operator import itemgetter
+from types import MappingProxyType
 from typing import (
     Any,
     Callable,
@@ -12,44 +13,77 @@ from typing import (
     Mapping,
     NoReturn,
     Sequence,
+    Type,
     Union,
 )
 
 import gensim.parsing.preprocessing as gsp
 import nltk
+from deprecation import deprecated
+from nltk.metrics.association import NGRAM
 import numpy as np
 import pandas as pd
 from fuzzywuzzy.fuzz import WRatio as weighted_ratio
 from fuzzywuzzy.process import extractOne as extract_one
 from IPython.core.display import Markdown, display
 from nltk.corpus import wordnet
+from nltk.sentiment.util import mark_negation as mark_neg
+from nltk.stem.porter import PorterStemmer
 from nltk.stem.wordnet import WordNetLemmatizer
-from nltk.tokenize import casual, sexpr
+from nltk.tokenize import casual
+from nltk.tokenize.treebank import TreebankWordTokenizer, TreebankWordDetokenizer
+from nltk.metrics import (
+    BigramAssocMeasures,
+    TrigramAssocMeasures,
+    QuadgramAssocMeasures,
+)
 from numpy import ndarray
+from numpy.lib.function_base import iterable
 from pandas._typing import AnyArrayLike
+from pandas.core.dtypes.inference import is_list_like, is_nested_list_like
 from pandas.core.frame import DataFrame
 from pandas.core.series import Series
 from scipy.sparse import csr_matrix
 from unidecode import unidecode
 
 from . import utils
-from ._validation import _check_1dlike
+from ._validation import _check_1dlike, _validate_docs
 from .typing import (
     CallableOnStr,
     Documents,
     PatternLike,
-    RandomSeed,
+    SeedLike,
     TaggedTokenList,
     Tokenizer,
     TokenList,
 )
+
+NGRAM_FINDERS = MappingProxyType(
+    {
+        2: nltk.BigramCollocationFinder,
+        3: nltk.TrigramCollocationFinder,
+        4: nltk.QuadgramCollocationFinder,
+    }
+)
+NGRAM_MEASURES = MappingProxyType(
+    {
+        2: nltk.BigramAssocMeasures,
+        3: nltk.TrigramAssocMeasures,
+        4: nltk.QuadgramAssocMeasures,
+    }
+)
+DEFAULT_TOKENIZER = nltk.word_tokenize
+DEFAULT_SEP = "<<"
+CACHE_SIZE = int(5e4)
+tb_tokenize = TreebankWordTokenizer().tokenize
+tb_detokenize = TreebankWordDetokenizer().tokenize
 
 # Most filter functions here rely on the generic function `_process`.
 # This allows them to easily handle a wide variety of input types.
 
 
 @singledispatch
-def _process(docs: Documents, func: CallableOnStr) -> Any:
+def _process(docs: Documents, func: CallableOnStr, **kwargs) -> Any:
     """Apply `func` to string or strings.
 
     Parameters
@@ -60,6 +94,8 @@ def _process(docs: Documents, func: CallableOnStr) -> Any:
 
     func : Callable
         Callable for processing `docs`.
+    **kwargs
+        Keyword arguments for `func`.
 
     Returns
     -------
@@ -69,38 +105,38 @@ def _process(docs: Documents, func: CallableOnStr) -> Any:
     # This is the fallback dispatch
     # Try coercing novel iterable to list
     if isinstance(docs, Iterable):
-        docs = _process(list(docs), func)
+        docs = _process(list(docs), func, **kwargs)
     else:
         raise TypeError(f"Expected str or iterable of str, got {type(docs)}")
     return docs
 
 
 @_process.register
-def _(docs: list, func: CallableOnStr) -> list:
+def _(docs: list, func: CallableOnStr, **kwargs) -> list:
     """Dispatch for list"""
-    return list(map(func, docs))
+    return list(map(partial(func, **kwargs), docs))
 
 
 @_process.register
-def _(docs: Series, func: CallableOnStr) -> Series:
+def _(docs: Series, func: CallableOnStr, **kwargs) -> Series:
     """Dispatch for Series"""
-    return docs.map(func)
+    return docs.map(partial(func, **kwargs))
 
 
 @_process.register
-def _(docs: ndarray, func: CallableOnStr) -> ndarray:
+def _(docs: ndarray, func: CallableOnStr, **kwargs) -> ndarray:
     """Dispatch for ndarray"""
     # Check that shape is (n_samples,) or (n_samples, 1)
     _check_1dlike(docs)
 
     # Map over flat array
-    return utils.flat_map(func, docs)
+    return utils.flat_map(func, docs, **kwargs)
 
 
 @_process.register
-def _(docs: str, func: CallableOnStr) -> Any:
+def _(docs: str, func: CallableOnStr, **kwargs) -> Any:
     """Dispatch for single string"""
-    return func(docs)
+    return func(docs, **kwargs)
 
 
 def lowercase(docs: Documents) -> Documents:
@@ -250,10 +286,9 @@ def strip_tags(docs: Documents) -> Documents:
     return _process(docs, gsp.strip_tags)
 
 
-def stem_text(docs: Documents) -> Documents:
+@singledispatch
+def stem_text(docs: Documents, lowercase: bool = False) -> Documents:
     """Apply Porter stemming to text.
-
-    Thin layer over gensim.parsing.preprocessing.stem_text.
 
     Parameters
     ----------
@@ -265,14 +300,28 @@ def stem_text(docs: Documents) -> Documents:
     str or iterable of str
         Processed document(s).
     """
-    return _process(docs, gsp.stem_text)
+    # This is the dispatch for non-str types.
+    if isinstance(docs, Iterable):
+        docs = _process(docs, stem_text, lowercase=lowercase)
+    else:
+        raise TypeError(f"Expected str or iterable of str, received {type(docs)}.")
+    return docs
+
+
+@stem_text.register
+@lru_cache(maxsize=CACHE_SIZE, typed=False)
+def _(docs: str, lowercase: bool = False):
+    """Dispatch for str. Keeps cache for performance."""
+    stem = PorterStemmer()
+    tokens = tb_tokenize(docs)
+    tokens = [stem.stem(x, lowercase) for x in tokens]
+    return tb_detokenize(tokens)
 
 
 def strip_handles(docs: Documents) -> Documents:
     """Remove Twitter @mentions or other similar handles.
 
-    Thin layer over nltk.tokenize.casual.remove_handles. This is
-    the function used by TweetTokenizer if `strip_handles=True`.
+    Thin layer over nltk.tokenize.casual.remove_handles.
 
     Parameters
     ----------
@@ -341,30 +390,245 @@ def strip_punct(
     return _process(docs, sub)
 
 
-def chain_filts(docs: Documents, filts: Iterable[CallableOnStr]) -> Documents:
-    """Apply a pipeline of filters to docs.
+@singledispatch
+def strip_stopwords(docs: Documents, stopwords: Collection[str]):
+    return _process(docs, strip_stopwords, stopwords=stopwords)
 
-    Extension of gensim.parsing.preprocessing.strip_punctuation.
+
+@strip_stopwords.register
+def _(docs: str, stopwords: Collection[str]):
+    stopwords = set(stopwords)
+    tokens = [x for x in tb_tokenize(docs) if x not in stopwords]
+    return tb_detokenize(tokens)
+
+
+@deprecated(details="Use `chain_funcs` instead.")
+def chain_filts(docs: Documents, filts: List[CallableOnStr]) -> Documents:
+    """Apply a pipeline of functions to docs.
 
     Parameters
     ----------
     docs : str or iterable of str
         Document(s) to process.
-    filts : list
-        List of callable filters to apply elementwise to docs.
+    filts : list of callable
+        Callables to apply elementwise to docs. Should take a single str argument.
 
     Returns
     -------
-    str or iterable of str
-        Processed document(s).
+    Any
+        Result of processing. Probably a str, iterable of str, or nested structure.
     """
     for filt in filts:
         docs = _process(docs, filt)
+
     return docs
 
 
+@singledispatch
+def scored_ngrams(
+    docs: Documents,
+    n: int = 2,
+    measure: str = "pmi",
+    tokenizer: Tokenizer = DEFAULT_TOKENIZER,
+    preprocessor: CallableOnStr = None,
+    stopwords: Collection[str] = None,
+    min_freq: int = 0,
+    fuse_tuples: bool = True,
+    sep: str = " ",
+) -> Series:
+
+    _validate_docs(docs)
+    # Coerce docs to list
+    if isinstance(docs, (Series, ndarray)):
+        docs = docs.squeeze().tolist()
+    else:
+        docs = list(docs)
+
+    # Get collocation finder and measures
+    if not isinstance(n, int):
+        raise TypeError(f"Expected `n` to be int, got {type(n)}.")
+    if 1 < n < 5:
+        n = int(n)
+        finder = NGRAM_FINDERS[n]
+        measures = NGRAM_MEASURES[n]()
+    else:
+        raise ValueError(f"Valid `n` values are 2, 3, and 4. Got {n}.")
+
+    
+    if preprocessor is not None:
+        # Apply preprocessing
+        docs = map(preprocessor, docs)
+    if stopwords is not None:
+        # Drop stopwords
+        docs = strip_stopwords(docs, stopwords)
+
+    # Find and score collocations
+    ngrams = finder.from_documents(map(tokenizer, docs))
+    ngrams.apply_freq_filter(min_freq)
+    ngram_score = ngrams.score_ngrams(getattr(measures, measure))
+
+    # Put the results in a DataFrame, squeeze into Series
+    kind = {2: "bigram", 3: "trigram", 4: "quadgram"}[n]
+    ngram_score = pd.DataFrame(ngram_score, columns=[kind, "score"])
+    if fuse_tuples:
+        # Join ngram tuples
+        ngram_score[kind] = ngram_score[kind].str.join(sep)
+    return ngram_score.set_index(kind).squeeze()
+
+
+@scored_ngrams.register
+def _(
+    docs: str,
+    n: int = 2,
+    measure: str = "pmi",
+    tokenizer: Tokenizer = DEFAULT_TOKENIZER,
+    preprocessor: CallableOnStr = None,
+    stopwords: Collection[str] = None,
+    min_freq: int = 0,
+    fuse_tuples: bool = True,
+    sep: str = " ",
+) -> Series:
+    # Process as singleton
+    ngram_score = scored_ngrams(
+        [docs],
+        n=n,
+        measure=measure,
+        tokenizer=tokenizer,
+        preprocessor=preprocessor,
+        stopwords=stopwords,
+        min_freq=min_freq,
+        fuse_tuples=fuse_tuples,
+        sep=sep,
+    )
+    return ngram_score
+
+
+def scored_bigrams(
+    docs: str,
+    measure: str = "pmi",
+    tokenizer: Tokenizer = DEFAULT_TOKENIZER,
+    preprocessor: CallableOnStr = None,
+    stopwords: Collection[str] = None,
+    min_freq: int = 0,
+    fuse_tuples: bool = True,
+    sep: str = " ",
+) -> Series:
+    bigram_score = scored_ngrams(
+        docs,
+        n=2,
+        measure=measure,
+        tokenizer=tokenizer,
+        preprocessor=preprocessor,
+        stopwords=stopwords,
+        min_freq=min_freq,
+        fuse_tuples=fuse_tuples,
+        sep=sep,
+    )
+    return bigram_score
+
+
+def scored_trigrams(
+    docs: str,
+    measure: str = "pmi",
+    tokenizer: Tokenizer = DEFAULT_TOKENIZER,
+    preprocessor: CallableOnStr = None,
+    stopwords: Collection[str] = None,
+    min_freq: int = 0,
+    fuse_tuples: bool = True,
+    sep: str = " ",
+) -> Series:
+    trigram_score = scored_ngrams(
+        docs,
+        n=3,
+        measure=measure,
+        tokenizer=tokenizer,
+        preprocessor=preprocessor,
+        stopwords=stopwords,
+        min_freq=min_freq,
+        fuse_tuples=fuse_tuples,
+        sep=sep,
+    )
+    return trigram_score
+
+
+def scored_quadgrams(
+    docs: str,
+    measure: str = "pmi",
+    tokenizer: Tokenizer = DEFAULT_TOKENIZER,
+    preprocessor: CallableOnStr = None,
+    stopwords: Collection[str] = None,
+    min_freq: int = 0,
+    fuse_tuples: bool = True,
+    sep: str = " ",
+) -> Series:
+    quadgram_score = scored_ngrams(
+        docs,
+        n=4,
+        measure=measure,
+        tokenizer=tokenizer,
+        preprocessor=preprocessor,
+        stopwords=stopwords,
+        min_freq=min_freq,
+        fuse_tuples=fuse_tuples,
+        sep=sep,
+    )
+    return quadgram_score
+
+
+def chain_funcs(docs: Documents, funcs: List[Callable]) -> Any:
+    """Apply a pipeline of functions to docs.
+
+    Parameters
+    ----------
+    docs : str or iterable of str
+        Document(s) to process.
+    funcs : list of callable
+        Callables to apply elementwise to docs. The first callable must
+        take a single str argument.
+
+    Returns
+    -------
+    Any
+        Result of processing. Probably a str, iterable of str, or nested structure.
+    """
+    # Define pipeline function for singular input.
+    # This allows use of `_process` for any chain of function
+    # transformations which initially takes a single str argument.
+    # The functions can return lists of tuples of str, or whatever,
+    # as long as the first function takes a str argument.
+    def process_singular(doc):
+        for func in funcs:
+            if not doc:
+                break
+            doc = func(doc)
+        return doc
+
+    # Vectorize `process_singular`
+    return _process(docs, process_singular)
+
+
+def make_preprocessor(funcs: List[Callable]) -> partial:
+    """Create a pipeline callable which applies a chain of functions to docs.
+
+    The resulting generic pipeline function will accept one argument
+    of type str or iterable of str.
+
+    Parameters
+    ----------
+    funcs : list of callable
+        Callables to apply elementwise to docs. The first callable must
+        take a single str argument.
+
+    Returns
+    -------
+    partial object
+        Generic pipeline callable.
+    """
+    return partial(chain_funcs, funcs=funcs)
+
+
 def readable_sample(
-    data: Series, n: int = 10, random_state: RandomSeed = None
+    data: Series, n: int = 10, random_state: SeedLike = None
 ) -> NoReturn:
     """Display readable sample of text from `data`.
 
@@ -429,11 +693,16 @@ def space_tokenize(docs: Documents) -> TokenList:
 @singledispatch
 def tokenize_tag(
     docs: Documents,
-    tokenizer: Tokenizer = space_tokenize,
+    tokenizer: Tokenizer = DEFAULT_TOKENIZER,
     fuse_tuples: bool = False,
-    sep: str = "/",
+    sep: str = DEFAULT_SEP,
+    as_tokens: bool = True,
 ) -> Union[
-    TaggedTokenList, TokenList, Collection[TaggedTokenList], Collection[TokenList]
+    Documents,
+    TaggedTokenList,
+    TokenList,
+    Collection[TaggedTokenList],
+    Collection[TokenList],
 ]:
     """Tokenize and POS-tag documents.
 
@@ -442,14 +711,13 @@ def tokenize_tag(
     docs : str or iterable of str
         Document(s) to tokenize and tag.
     tokenizer: callable, optional
-        Callable to apply to documents. Defaults to
-        `space_tokenize`.
+        Callable to apply to documents.
     fuse_tuples: bool, optional
         Join tuples (word, tag) into single strings using
-        separator `sep`. False by default.
+        separator `sep`.
     sep: str, optional
         Separator string for joining (word, tag) tuples. Only
-        relevant if `fuse_tuples=True`
+        relevant if `fuse_tuples=True`.
 
     Returns
     -------
@@ -457,11 +725,15 @@ def tokenize_tag(
     or collection of list of str
         Tokenized and tagged document(s).
     """
-    # This is the fallback dispatch.
-    # Try coercing novel iterable to list.
+    # This is the dispatch for non-str types.
     if isinstance(docs, Iterable):
-        docs = tokenize_tag(
-            list(docs), tokenizer=tokenizer, fuse_tuples=fuse_tuples, sep=sep
+        docs = _process(
+            docs,
+            tokenize_tag,
+            tokenizer=tokenizer,
+            fuse_tuples=fuse_tuples,
+            sep=sep,
+            as_tokens=as_tokens,
         )
     else:
         raise TypeError(f"Expected str or iterable of str, got {type(docs)}")
@@ -469,13 +741,19 @@ def tokenize_tag(
 
 
 @tokenize_tag.register
+@lru_cache(maxsize=CACHE_SIZE, typed=False)
 def _(
     docs: str,
-    tokenizer: Tokenizer = space_tokenize,
+    tokenizer: Tokenizer = DEFAULT_TOKENIZER,
     fuse_tuples: bool = False,
-    sep: str = "/",
-) -> Union[TaggedTokenList, TokenList]:
-    """Dispatch for str (singular)."""
+    sep: str = DEFAULT_SEP,
+    as_tokens: bool = True,
+) -> Union[str, TokenList, TaggedTokenList]:
+    """Dispatch for str. Keeps cache for performance."""
+    # Tuples must be fused if returning a str
+    if not as_tokens:
+        fuse_tuples = True
+
     # Tokenize and tag
     docs = tokenizer(docs)
     docs = nltk.pos_tag(docs)
@@ -483,110 +761,75 @@ def _(
     if fuse_tuples:
         # Fuse tuples
         docs = [nltk.tuple2str(x, sep) for x in docs]
-    return docs
+    return docs if as_tokens else " ".join(docs)
 
 
-@tokenize_tag.register
-def _(
-    docs: list,
-    tokenizer: Tokenizer = space_tokenize,
-    fuse_tuples: bool = False,
-    sep: str = "/",
-) -> Union[List[TaggedTokenList], List[TokenList]]:
-    """Dispatch for list."""
-    # Tokenize
-    docs = list(map(tokenizer, docs))
-
-    # Tag as "sentences", which is equivalent to nltk.pos_tag,
-    # but more efficient for a list of documents.
-    docs = nltk.pos_tag_sents(docs)
-
-    if fuse_tuples:
-        # Fuse tuples
-        for i, doc in enumerate(docs):
-            docs[i] = [nltk.tuple2str(x, sep=sep) for x in doc]
-    return docs
-
-
-@tokenize_tag.register
-def _(
-    docs: Series,
-    tokenizer: Tokenizer = space_tokenize,
-    fuse_tuples: bool = False,
-    sep: str = "/",
-) -> Series:
-    """Dispatch for Series."""
-    # Process as list
-    values = tokenize_tag(
-        docs.to_list(),
-        tokenizer=tokenizer,
-        fuse_tuples=fuse_tuples,
-        sep=sep,
-    )
-
-    # Reconstruct Series
-    return Series(data=values, index=docs.index, name=docs.name)
-
-
-@tokenize_tag.register
-def _(
-    docs: ndarray,
-    tokenizer: Tokenizer = space_tokenize,
-    fuse_tuples: bool = False,
-    sep: str = "/",
-) -> ndarray:
-    """Dispatch for ndarray."""
-    # Make sure shape is (n_samples,) or (n_samples, 1)
-    _check_1dlike(docs)
-    shape = docs.shape
-
-    # Process as list
-    docs = tokenize_tag(
-        docs.squeeze().tolist(),
-        tokenizer=tokenizer,
-        fuse_tuples=fuse_tuples,
-        sep=sep,
-    )
-
-    # Reconstruct array
-    return np.array(docs, dtype=object).reshape(shape)
-
-
-def tokenize_stem(
-    docs: Documents, tokenizer: Tokenizer = space_tokenize
-) -> Union[TokenList, Collection[TokenList]]:
-    """Tokenize and Porter stem documents.
+@singledispatch
+def mark_pos(docs: Documents, sep: str = DEFAULT_SEP):
+    """Mark POS in documents.
 
     Parameters
     ----------
     docs : str or iterable of str
-        Document(s) to tokenize and stem.
-    tokenizer: callable
-        Callable to apply to documents. Defaults to
-        `space_tokenize`.
+        Document(s) to tokenize and tag.
+    sep: str, optional
+        Separator string for joining (word, tag) tuples.
 
     Returns
     -------
-    list of str or collection of lists of str
-        Tokenized document(s).
+    str or collection of str
+        POS marked document(s).
     """
-    docs = _process(docs, tokenizer)
-    docs = stem_text(docs)
+    if isinstance(docs, Iterable):
+        docs = _process(docs, mark_pos, sep=sep)
+    else:
+        raise TypeError(f"Expected str or iterable of str, received {type(docs)}.")
     return docs
 
 
+@mark_pos.register
+def _(docs: str, sep: str = DEFAULT_SEP):
+    """Dispatch for str."""
+    tokens = tokenize_tag(
+        docs,
+        tokenizer=tb_tokenize,
+        fuse_tuples=True,
+        sep=sep,
+    )
+    return tb_detokenize(tokens)
+
+
 @singledispatch
-def wordnet_lemmatize(
-    docs: Documents, tokenizer: Tokenizer = space_tokenize, as_tokens: bool = False
-) -> Union[Documents, TokenList, Collection[TokenList]]:
-    """[summary]
+def mark_negation(docs: Documents, sep: str = DEFAULT_SEP) -> Documents:
+    if isinstance(docs, Iterable):
+        docs = _process(docs, mark_negation, sep=sep)
+    else:
+        raise TypeError(f"Expected str or iterable of str, received {type(docs)}.")
+    return docs
+
+
+@mark_negation.register
+@lru_cache(maxsize=CACHE_SIZE, typed=False)
+def _(docs: str, sep: str = DEFAULT_SEP) -> str:
+    """Dispatch for str. Keeps cache for performance."""
+    docs = mark_neg(tb_tokenize(docs))
+    for i, word in enumerate(docs):
+        docs[i] = re.sub(r"_NEG$", f"{sep}NEG", word)
+    return tb_detokenize(docs)
+
+
+@singledispatch
+def wordnet_lemmatize(docs: Documents) -> Documents:
+    """Lemmatize document(s) using POS-tagging and WordNet lemmatization.
+
+    Tags parts of speech and feeds tagged unigrams into WordNet Lemmatizer.
 
     Parameters
     ----------
     docs : str or iterable of str
         Document(s) to lemmatize.
     tokenizer : callable (str -> list of str), optional
-        Callable for tokenizing document(s), by default space_tokenize.
+        Callable for tokenizing document(s).
     as_tokens : bool, optional
         Return document(s) as list(s) of tokens, by default False.
 
@@ -595,68 +838,21 @@ def wordnet_lemmatize(
     str, list of str (as_tokens), collection of str, collection of list of str (as_tokens)
         Lemmatized document(s), optionally as token-list(s).
     """
-    # This is the fallback dispatch
-    # Try coercing novel sequence to Series
-    if isinstance(docs, Sequence):
-        docs = Series(list(docs))
-        docs = wordnet_lemmatize(docs, tokenizer=tokenizer, as_tokens=as_tokens)
+    # Process iterables using the str dispatch
+    if isinstance(docs, Iterable):
+        lemmatize = partial(wordnet_lemmatize)
+        docs = _process(docs, lemmatize)
     else:
         raise TypeError(f"Expected str or iterable of str, got {type(docs)}")
     return docs
 
 
 @wordnet_lemmatize.register
-def _(
-    docs: Series, tokenizer: Tokenizer = space_tokenize, as_tokens: bool = False
-) -> Series:
-    """Dispatch for Series"""
+@lru_cache(maxsize=CACHE_SIZE, typed=False)
+def _(docs: str) -> str:
+    """Dispatch for str. Keeps cache for performance."""
     # Tokenize and tag POS
-    docs = tokenize_tag(docs, tokenizer=tokenizer)
-
-    # Convert Treebank tags to Wordnet tags
-    words = docs.explode().dropna()
-    treebank_pos = words.map(itemgetter(1))
-    wordnet_pos = treebank_pos.map(treebank2wordnet)
-    words = words.map(itemgetter(0))
-    words = pd.Series(list(zip(words, wordnet_pos)), index=words.index)
-
-    # Lemmatize
-    wnl = WordNetLemmatizer()
-    words = words.map(lambda x: wnl.lemmatize(*x))
-
-    # Rebuild exploded docs
-    docs = utils.implode(words).rename(docs.name).reindex_like(docs)
-    return docs if as_tokens else docs.str.join(" ")
-
-
-@wordnet_lemmatize.register
-def _(
-    docs: ndarray, tokenizer: Tokenizer = space_tokenize, as_tokens: bool = False
-) -> ndarray:
-    """Dispatch for ndarray"""
-    shape = docs.shape
-    docs = wordnet_lemmatize(
-        pd.Series(docs.flat), tokenizer=tokenizer, as_tokens=as_tokens
-    )
-    return docs.to_numpy().reshape(shape)
-
-
-@wordnet_lemmatize.register
-def _(
-    docs: list, tokenizer: Tokenizer = space_tokenize, as_tokens: bool = False
-) -> Union[TokenList, List[TokenList]]:
-    """Dispatch for list"""
-    docs = wordnet_lemmatize(pd.Series(docs), tokenizer=tokenizer, as_tokens=as_tokens)
-    return docs.to_list()
-
-
-@wordnet_lemmatize.register
-def _(
-    docs: str, tokenizer: Tokenizer = space_tokenize, as_tokens: bool = False
-) -> Union[str, TokenList]:
-    """Dispatch for str"""
-    # Tokenize and tag POS
-    words = tokenize_tag(docs, tokenizer=tokenizer)
+    words = tokenize_tag(docs, tokenizer=tb_tokenize)
 
     # Convert Treebank tags to Wordnet tags
     words, tb_pos = zip(*words)
@@ -667,7 +863,7 @@ def _(
     wnl = WordNetLemmatizer()
     words = [wnl.lemmatize(x, y) for x, y in words]
 
-    return words if as_tokens else " ".join(words)
+    return tb_detokenize(words)
 
 
 def locate_patterns(
