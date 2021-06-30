@@ -5,6 +5,8 @@ import pandas as pd
 from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.pipeline import Pipeline
 from pandas.core.generic import NDFrame
+from . import utils
+
 
 def _validate_orient(orient):
     if orient.lower() not in {"h", "v"}:
@@ -46,11 +48,13 @@ def _validate_transformer(obj):
 
 
 def _validate_raw_docs(X: Iterable[str]):
+    """Used for text vectorizers. Makes sure X is iterable over raw documents."""
     if not isinstance(X, Iterable) or isinstance(X, str):
-        raise TypeError(f"Expected iterable over raw documents, {type(X)} object received.")
+        raise TypeError(
+            f"Expected iterable over raw documents, {type(X)} object received."
+        )
     if isinstance(X, (np.ndarray, NDFrame)):
         _check_1dlike(X)
-
 
     if isinstance(X, np.ndarray) and X.ndim > 1:
         raise ValueError(
@@ -58,3 +62,18 @@ def _validate_raw_docs(X: Iterable[str]):
         )
     if isinstance(X, pd.DataFrame):
         raise TypeError(f"Expected iterable over raw documents, received DataFrame")
+
+
+def _validate_docs(docs):
+    """Makes sure `docs` is either str or iterable of str."""
+    if not isinstance(docs, (str, Iterable)):
+        raise TypeError(f"Expected str or iterable of str, got {type(docs)}.")
+    elif isinstance(docs, Iterable):
+        docs = np.asarray(docs)
+        _check_1dlike(docs)
+        types = utils.flat_map(type, docs.squeeze())
+        if not (types == str).all():
+            non_str = types[types != str]
+            raise TypeError(
+                f"Expected iterable of str, but iterable contains {non_str[0]}."
+            )
