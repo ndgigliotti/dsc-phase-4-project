@@ -415,8 +415,8 @@ def _(data: pd.DataFrame, column: str = None, labels: List = None):
     return data
 
 
-def flat_map(func: Callable, arr: np.ndarray, *args, **kwargs):
+def flat_map(func: Callable, arr: np.ndarray, **kwargs):
     shape = arr.shape
-    func = partial(func, *args, **kwargs)
+    func = partial(func, **kwargs)
     arr = np.array(list(map(func, arr.flat)), dtype=arr.dtype)
     return arr.reshape(shape)

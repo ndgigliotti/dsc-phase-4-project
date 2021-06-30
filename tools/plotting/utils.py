@@ -7,7 +7,7 @@ import seaborn as sns
 from matplotlib import pyplot as plt
 from sklearn.preprocessing import minmax_scale
 
-from ..typing import RandomSeed
+from ..typing import SeedLike
 
 # Default style settings for heatmaps
 HEATMAP_STYLE = MappingProxyType(
@@ -138,7 +138,7 @@ def cat_palette(
     keys: list,
     shuffle: bool = False,
     offset: int = 0,
-    seed: RandomSeed = None,
+    seed: SeedLike = None,
     **kwargs,
 ) -> dict:
     """Create a color palette dictionary for a categorical variable.
