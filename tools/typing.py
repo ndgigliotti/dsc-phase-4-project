@@ -1,21 +1,24 @@
 from re import Pattern
 from typing import Any, Callable, Iterable, List, Tuple, TypeVar, Union
 
-import numpy as np
+from numpy import ndarray
+from numpy.random import BitGenerator, RandomState
+from pandas.core.generic import NDFrame
 from pandas.core.series import Series
+from scipy.sparse.base import spmatrix
 from sklearn.base import BaseEstimator
 from sklearn.pipeline import Pipeline
 
 # RandomState-related types
-RandomSeed = Union[int, np.ndarray, np.random.BitGenerator, np.random.RandomState]
-LegacyRandomSeed = Union[int, np.ndarray, np.random.RandomState]
+SeedLike = Union[int, ndarray, BitGenerator, RandomState]
+LegacySeedLike = Union[int, ndarray, RandomState]
 
 # String or compiled regex
 PatternLike = Union[str, Pattern]
 
 # Series or NDArray
-SeriesOrArray = TypeVar("SeriesOrArray", Series, np.ndarray)
-
+SeriesOrArray = Union[Series, ndarray]
+NDStruct = Union[NDFrame, ndarray, spmatrix]
 # Estimator or Pipeline
 EstimatorLike = Union[BaseEstimator, Pipeline]
 
