@@ -20,10 +20,11 @@ from sklearn.metrics import (
     roc_auc_score,
 )
 from sklearn.pipeline import Pipeline
+from sklearn.model_selection import train_test_split
 
 from ..._validation import _validate_train_test_split
 from ...plotting.utils import smart_subplots
-from ...typing import EstimatorLike, SeriesOrArray
+from ...typing import EstimatorLike, SeedLike, SeriesOrArray
 from ...utils import pandas_heatmap
 
 
@@ -95,6 +96,10 @@ def classification_report(
     DataFrame or Styler (if `heatmap = True`)
         Diagnostic report table.
     """
+    # Coerce to array
+    y_test = np.asarray(y_test)
+    y_pred = np.asarray(y_pred)
+
     # Get unique labels
     labels = np.unique(np.hstack([y_test.flatten(), y_pred.flatten()]))
 
@@ -368,6 +373,8 @@ def test_fit(
     X_test: Union[DataFrame, ndarray],
     y_train: Union[Series, ndarray],
     y_test: Union[Series, ndarray],
+    resplit: bool = False,
+    random_state: SeedLike = None,
     pos_label: Union[bool, int, float, str] = None,
     zero_division: str = "warn",
     size: Tuple[float, float] = (4, 4),
@@ -389,6 +396,10 @@ def test_fit(
         Target variable training set.
     y_test : Series or ndarray
         Target variable test set.
+    resplit: bool, optional
+        Do a fresh split before training, defaults to False.
+    random_state: int, ndarray, or RandomState, optional
+        Seed or RandomState for resplit, defaults to None.
     pos_label : bool, int, float, or str, optional
         Label of positive class, by default None.
     zero_division : str, optional
@@ -398,7 +409,23 @@ def test_fit(
     """
     # Check data shapes
     _validate_train_test_split(X_train, X_test, y_train, y_test)
-    
+
+    if resplit:
+        # Concatenate, shuffle, and resplit. Should
+        # be developed as a separate generic function.
+        if X_train.ndim > 1:
+            X = pd.concat([DataFrame(X_train), DataFrame(X_test)], axis=0)
+        else:
+            X = pd.concat([Series(X_train), Series(X_test)], axis=0)
+        y = pd.concat([Series(y_train), Series(y_test)], axis=0)
+        X_train, X_test, y_train, y_test = train_test_split(
+            X,
+            y,
+            shuffle=True,
+            stratify=y,
+            random_state=random_state,
+        )
+
     estimator.fit(X_train, y_train)
 
     standard_report(
