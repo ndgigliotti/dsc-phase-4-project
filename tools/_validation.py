@@ -1,4 +1,4 @@
-from typing import Iterable, Union
+from typing import Collection, Iterable, Union
 
 from numpy import ndarray
 from pandas.core.generic import NDFrame
@@ -80,13 +80,14 @@ def _validate_raw_docs(X: Iterable[str]):
     
 def _validate_docs(docs: Documents):
     """Check that `docs` is 1-dimensional iterable of str."""
-    if isinstance(docs, Iterable):
+    if not isinstance(docs, Iterable):
+        raise TypeError(f"Expected str or iterable of str; {type(docs)} object received.")
+    # Check contents if docs won't be exhausted by doing so
+    if isinstance(docs, Collection):
         for doc in docs:
             if not isinstance(doc, str):
                 raise TypeError(f"Expected iterable of str; encountered {type(doc)} when iterating.")
-    else:
-        raise TypeError(f"Expected str or iterable of str; {type(docs)} object received.")
-
+        
     # Ensure array-likes are 1-dim
     if isinstance(docs, (ndarray, NDFrame)):
         _check_1d(docs)

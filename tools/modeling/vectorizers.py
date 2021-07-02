@@ -265,7 +265,7 @@ class VaderVectorizer(BaseEstimator, TransformerMixin):
         compound_only=False,
         category_only=False,
         preprocessor: CallableOnStr = None,
-        norm="l2",
+        norm=None,
         sparse=True,
     ):
         self.trinarize = trinarize

@@ -1,7 +1,7 @@
 import itertools
 import re
 import string
-from functools import lru_cache, partial, singledispatch, wraps
+from functools import lru_cache, partial, singledispatch
 from operator import itemgetter
 from types import MappingProxyType
 from typing import (
@@ -32,6 +32,7 @@ from nltk.tokenize.treebank import TreebankWordDetokenizer, TreebankWordTokenize
 from numpy import ndarray
 from pandas._typing import AnyArrayLike
 from pandas.core.frame import DataFrame
+from pandas.core.generic import NDFrame
 from pandas.core.series import Series
 from scipy.sparse import csr_matrix
 from unidecode import unidecode
@@ -55,7 +56,7 @@ NGRAM_FINDERS = MappingProxyType(
         4: nltk.QuadgramCollocationFinder,
     }
 )
-"""Mapping for selecting the right ngram-finder."""
+"""Mapping for selecting ngram-finder."""
 
 NGRAM_MEASURES = MappingProxyType(
     {
@@ -64,15 +65,15 @@ NGRAM_MEASURES = MappingProxyType(
         4: nltk.QuadgramAssocMeasures,
     }
 )
-"""Mapping for selecting the right ngram scoring object."""
+"""Mapping for selecting ngram scoring object."""
 
 DEFAULT_TOKENIZER = nltk.word_tokenize
 """Default tokenizer to use when specifying tokenizer is optional."""
 
-DEFAULT_SEP = "<<"
+DEFAULT_SEP = "<"
 """Default separator to use for tagging words."""
 
-CACHE_SIZE = int(5e4)
+CACHE_SIZE = int(1e5)
 """Maximum number of recent calls to keep for functions with LRU caching."""
 
 tb_tokenize = TreebankWordTokenizer().tokenize
@@ -115,16 +116,13 @@ def _process(docs: Documents, func: CallableOnStr, **kwargs) -> Any:
 
     Returns
     -------
-    str or list, set, 1darray, Series of str
-        Processed string(s), same type as input.
+    Any
+        Processed string(s), same container type as input.
     """
     # This is the fallback dispatch
 
-    # Make sure input is valid
-    _validate_docs(docs)
-
-    # Coerce to list
-    return _process(list(docs), func, **kwargs)
+    # Return iterable
+    return map(partial(func, **kwargs), docs)
 
 
 @_process.register
@@ -418,15 +416,17 @@ def strip_punct(
 
 
 @singledispatch
-def strip_stopwords(docs: Documents, stopwords: Collection[str]) -> Documents:
+def strip_stopwords(
+    docs: Documents, stopwords: Collection[str] = gsp.STOPWORDS
+) -> Documents:
     """Remove stopwords from document(s).
 
     Parameters
     ----------
     docs : Documents
         Documents for stopword removal.
-    stopwords : collection of str
-        Set of stopwords to remove.
+    stopwords : collection of str, optional
+        Set of stopwords to remove. Defaults to Gensim stopwords.
 
     Returns
     -------
@@ -438,7 +438,8 @@ def strip_stopwords(docs: Documents, stopwords: Collection[str]) -> Documents:
 
 
 @strip_stopwords.register
-def _(docs: str, stopwords: Collection[str]):
+def _(docs: str, stopwords: Collection[str] = gsp.STOPWORDS):
+    """Dispatch for str."""
     stopwords = set(stopwords)
     tokens = [x for x in tb_tokenize(docs) if x not in stopwords]
     return tb_detokenize(tokens)
@@ -515,7 +516,7 @@ def scored_ngrams(
     """
     _validate_docs(docs)
     # Coerce docs to list
-    if isinstance(docs, (Series, ndarray)):
+    if isinstance(docs, (ndarray, Series)):
         docs = docs.squeeze().tolist()
     else:
         docs = list(docs)
@@ -821,6 +822,8 @@ def readable_sample(
     """
     if isinstance(data, DataFrame):
         raise ValueError(f"Expected Series, got {type(data)}")
+    if n > data.size:
+        n = data.size
     data = data.sample(n=n, random_state=random_state)
     display(Markdown(data.to_markdown()))
 
@@ -840,12 +843,12 @@ def treebank2wordnet(pos: str) -> str:
     str
         Wordnet POS tag.
     """
-    wordnet_pos = dict(
-        J=wordnet.ADJ,
-        V=wordnet.VERB,
-        N=wordnet.NOUN,
-        R=wordnet.ADV,
-    )
+    wordnet_pos = {
+        "J": wordnet.ADJ,
+        "V": wordnet.VERB,
+        "N": wordnet.NOUN,
+        "R": wordnet.ADV,
+    }
     return wordnet_pos.get(pos[0].upper(), wordnet.NOUN)
 
 
@@ -875,6 +878,7 @@ def space_tokenize(docs: Documents) -> TokenList:
 def tokenize_tag(
     docs: Documents,
     tokenizer: Tokenizer = DEFAULT_TOKENIZER,
+    tagset: str = None,
     fuse_tuples: bool = False,
     sep: str = DEFAULT_SEP,
     as_tokens: bool = True,
@@ -897,6 +901,8 @@ def tokenize_tag(
         Document(s) to tokenize and tag.
     tokenizer: callable, optional
         Callable to apply to documents.
+    tagset: str, optional
+        Name of NLTK tagset to use.
     fuse_tuples: bool, optional
         Join tuples (word, tag) into single strings using
         separator `sep`.
@@ -920,6 +926,7 @@ def tokenize_tag(
         docs,
         tokenize_tag,
         tokenizer=tokenizer,
+        tagset=tagset,
         fuse_tuples=fuse_tuples,
         sep=sep,
         as_tokens=as_tokens,
@@ -932,6 +939,7 @@ def tokenize_tag(
 def _(
     docs: str,
     tokenizer: Tokenizer = DEFAULT_TOKENIZER,
+    tagset: str = None,
     fuse_tuples: bool = False,
     sep: str = DEFAULT_SEP,
     as_tokens: bool = True,
@@ -943,7 +951,7 @@ def _(
 
     # Tokenize and tag
     docs = tokenizer(docs)
-    docs = nltk.pos_tag(docs)
+    docs = nltk.pos_tag(docs, tagset=tagset)
 
     if fuse_tuples:
         # Fuse tuples
@@ -952,7 +960,7 @@ def _(
 
 
 @singledispatch
-def mark_pos(docs: Documents, sep: str = DEFAULT_SEP) -> Documents:
+def mark_pos(docs: Documents, tagset: str = None, sep: str = DEFAULT_SEP) -> Documents:
     """Mark POS in documents with suffix.
 
     Keeps cache to reuse previously computed results. This improves
@@ -963,6 +971,8 @@ def mark_pos(docs: Documents, sep: str = DEFAULT_SEP) -> Documents:
     ----------
     docs : str or iterable of str
         Document(s) to tokenize and tag.
+    tagset: str, optional
+        Name of NLTK tagset to use.
     sep: str, optional
         Separator string for joining (word, tag) tuples.
 
@@ -975,17 +985,18 @@ def mark_pos(docs: Documents, sep: str = DEFAULT_SEP) -> Documents:
     _validate_docs(docs)
 
     # Process using str dispatch
-    return _process(docs, mark_pos, sep=sep)
+    return _process(docs, mark_pos, tagset=tagset, sep=sep)
 
 
 @mark_pos.register
 @lru_cache(maxsize=CACHE_SIZE, typed=False)
-def _(docs: str, sep: str = DEFAULT_SEP) -> Documents:
+def _(docs: str, tagset: str = None, sep: str = DEFAULT_SEP) -> Documents:
     """Dispatch for str. Keeps cache to reuse previous results."""
     # Get tokens with POS suffixes
     tokens = tokenize_tag(
         docs,
         tokenizer=tb_tokenize,
+        tagset=tagset,
         fuse_tuples=True,
         sep=sep,
     )
@@ -1032,9 +1043,9 @@ def _(docs: str, double_neg_flip: bool = False, sep: str = DEFAULT_SEP) -> str:
     docs = tb_tokenize(docs)
 
     # Apply nltk.sentiment.util.mark_negation
-    docs = nltk_mark_neg(tb_tokenize(docs), double_neg_flip=double_neg_flip)
+    docs = nltk_mark_neg(docs, double_neg_flip=double_neg_flip)
 
-    # Subsitute underscore for our separator
+    # Subsitute underscore for `sep`
     re_neg = re.compile(r"_NEG$")
     for i, word in enumerate(docs):
         docs[i] = re_neg.sub(f"{sep}NEG", word)
