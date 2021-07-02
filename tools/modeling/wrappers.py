@@ -9,7 +9,7 @@ from sklearn.base import BaseEstimator, TransformerMixin
 from sklearn.utils.validation import check_is_fitted
 
 from .._validation import _validate_transformer
-from ..typing import NDStruct
+from ..typing import ArrayLike
 
 
 class PandasWrapper(BaseEstimator, TransformerMixin):
@@ -35,7 +35,7 @@ class PandasWrapper(BaseEstimator, TransformerMixin):
         return X
 
     @singledispatchmethod
-    def fit(self, X: NDStruct, y: NDStruct = None, **fit_params):
+    def fit(self, X: ArrayLike, y: ArrayLike = None, **fit_params):
         if not self.passthrough:
             self.transformer.fit(X, y, **fit_params)
         return self
@@ -58,7 +58,7 @@ class PandasWrapper(BaseEstimator, TransformerMixin):
         return self
 
     @singledispatchmethod
-    def transform(self, X: NDStruct):
+    def transform(self, X: ArrayLike):
         check_is_fitted(self)
         if not self.passthrough:
             X = self.transformer.transform(X)
@@ -80,7 +80,7 @@ class PandasWrapper(BaseEstimator, TransformerMixin):
         return self.transform(X.to_frame()).squeeze()
 
     @singledispatchmethod
-    def inverse_transform(self, X: NDStruct):
+    def inverse_transform(self, X: ArrayLike):
         check_is_fitted(self)
         if not self.passthrough:
             X = self.transformer.inverse_transform(X)

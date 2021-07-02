@@ -1,19 +1,21 @@
-from typing import Iterable
-import numpy as np
-from numpy.lib.arraysetops import isin
-import pandas as pd
-from sklearn.base import BaseEstimator, TransformerMixin
-from sklearn.pipeline import Pipeline
+from typing import Iterable, Union
+
+from numpy import ndarray
 from pandas.core.generic import NDFrame
-from . import utils
+from sklearn.base import TransformerMixin
+from sklearn.pipeline import Pipeline
+
+from .typing import ArrayLike, Documents
 
 
-def _validate_orient(orient):
+def _validate_orient(orient: str):
+    """Check that `orient` is 'h' or 'v'."""
     if orient.lower() not in {"h", "v"}:
         raise ValueError(f"`orient` must be 'h' or 'v', not {orient}")
 
 
-def _validate_sort(sort):
+def _validate_sort(sort: str):
+    """Check that `sort` is 'asc' or 'desc'."""
     if sort is None:
         pass
     elif sort.lower() not in {"asc", "desc"}:
@@ -21,6 +23,7 @@ def _validate_sort(sort):
 
 
 def _validate_train_test_split(X_train, X_test, y_train, y_test):
+    """Check that data shapes are consistent with proper split."""
     assert X_train.shape[0] == y_train.shape[0]
     assert X_test.shape[0] == y_test.shape[0]
     if X_train.ndim > 1:
@@ -29,22 +32,35 @@ def _validate_train_test_split(X_train, X_test, y_train, y_test):
         assert y_train.shape[1] == y_test.shape[1]
 
 
-def _check_1dlike(data):
+def _check_1dlike(data: ArrayLike):
+    """Check that data is shape (n_samples,) or (n_samples, 1)."""
+    if not (hasattr(data, "shape") and hasattr(data, "ndim")):
+        raise TypeError(
+            f"Expected array-like, got {type(data)}"
+        )
     msg = "Data must be shape (n_samples,) or (n_samples, 1)."
     if data.ndim == 2 and data.shape[1] > 1:
         raise ValueError(msg)
     elif data.ndim > 2:
         raise ValueError(msg)
 
+def _check_1d(data: ArrayLike):
+    """Check that input is 1-dimensional."""
+    if not (hasattr(data, "ndim")):
+        raise TypeError(
+            f"Expected array-like, got {type(data)}"
+        )
+    elif data.ndim > 1:
+        raise ValueError(f"Expected data to be 1-dimensional, but shape is {data.shape}.")
 
-def _validate_transformer(obj):
-    if obj is None:
-        raise ValueError("Transformer is None")
-    est = isinstance(obj, BaseEstimator)
+def _validate_transformer(obj: TransformerMixin):
+    """Check that `obj` is Scikit Learn transformer or pipeline."""
     trans = isinstance(obj, TransformerMixin)
     pipe = isinstance(obj, Pipeline)
-    if not ((est and trans) or pipe):
-        raise TypeError("Transformer must be Sklearn transformer or Pipeline")
+    if not trans or pipe:
+        raise TypeError(
+            f"Expected Scikit Learn transformer or pipeline, got {type(obj)}."
+        )
 
 
 def _validate_raw_docs(X: Iterable[str]):
@@ -53,27 +69,24 @@ def _validate_raw_docs(X: Iterable[str]):
         raise TypeError(
             f"Expected iterable over raw documents, {type(X)} object received."
         )
-    if isinstance(X, (np.ndarray, NDFrame)):
-        _check_1dlike(X)
-
-    if isinstance(X, np.ndarray) and X.ndim > 1:
+    if hasattr(X, "ndim") and X.ndim > 1:
         raise ValueError(
-            f"Expected iterable over raw documents, received {X.ndim}darray"
+            f"Expected iterable over raw documents, received {X.ndim}-d {type(X)}."
         )
-    if isinstance(X, pd.DataFrame):
-        raise TypeError(f"Expected iterable over raw documents, received DataFrame")
+    for doc in X:
+        if not isinstance(doc, str):
+            raise TypeError(f"Expected iterable of only str; encountered {type(doc)}.")
 
+    
+def _validate_docs(docs: Documents):
+    """Check that `docs` is 1-dimensional iterable of str."""
+    if isinstance(docs, Iterable):
+        for doc in docs:
+            if not isinstance(doc, str):
+                raise TypeError(f"Expected iterable of str; encountered {type(doc)} when iterating.")
+    else:
+        raise TypeError(f"Expected str or iterable of str; {type(docs)} object received.")
 
-def _validate_docs(docs):
-    """Makes sure `docs` is either str or iterable of str."""
-    if not isinstance(docs, (str, Iterable)):
-        raise TypeError(f"Expected str or iterable of str, got {type(docs)}.")
-    elif isinstance(docs, Iterable):
-        docs = np.asarray(docs)
-        _check_1dlike(docs)
-        types = utils.flat_map(type, docs.squeeze())
-        if not (types == str).all():
-            non_str = types[types != str]
-            raise TypeError(
-                f"Expected iterable of str, but iterable contains {non_str[0]}."
-            )
+    # Ensure array-likes are 1-dim
+    if isinstance(docs, (ndarray, NDFrame)):
+        _check_1d(docs)

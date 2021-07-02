@@ -18,7 +18,7 @@ PatternLike = Union[str, Pattern]
 
 # Series or NDArray
 SeriesOrArray = Union[Series, ndarray]
-NDStruct = Union[NDFrame, ndarray, spmatrix]
+ArrayLike = Union[NDFrame, ndarray, spmatrix]
 # Estimator or Pipeline
 EstimatorLike = Union[BaseEstimator, Pipeline]
 

@@ -1,21 +1,26 @@
 from functools import singledispatch
+from typing import NoReturn, Union
 
 import matplotlib.pyplot as plt
+from matplotlib.axes import Axes
 import numpy as np
+from numpy import ndarray
 import pandas as pd
+from pandas.core.series import Series
 
 from ..outliers import tukey_fences
+from .. import utils
 
 
 def add_tukey_marks(
-    data: pd.Series,
-    ax: plt.Axes,
+    data: Series,
+    ax: Axes,
     annot: bool = True,
     iqr_color: str = "r",
     fence_color: str = "k",
     fence_style: str = "--",
     annot_quarts: bool = False,
-) -> plt.Axes:
+) -> Axes:
     """Add IQR box and fences to a histogram-like plot.
 
     Args:
@@ -27,7 +32,7 @@ def add_tukey_marks(
         annot_quarts (bool, optional): Annotate Q1 and Q3. Defaults to False.
 
     Returns:
-        plt.Axes: Annotated Axes object.
+        Axes: Annotated Axes object.
     """
     q1 = data.quantile(0.25)
     q3 = data.quantile(0.75)
@@ -50,8 +55,9 @@ def add_tukey_marks(
 
 @singledispatch
 def annot_bars(
-    ax: plt.Axes,
+    ax: Union[ndarray, Axes],
     dist: float = 0.15,
+    pad: float = 0,
     color: str = "k",
     compact: bool = False,
     orient: str = "h",
@@ -59,8 +65,7 @@ def annot_bars(
     fontsize: int = 12,
     alpha: float = 0.5,
     drop_last: int = 0,
-    **kwargs,
-) -> None:
+) -> NoReturn:
     """Annotate a bar graph with the bar values.
 
     Parameters
@@ -69,6 +74,8 @@ def annot_bars(
         Axes object to annotate.
     dist : float, optional
         Distance from ends as fraction of max bar. Defaults to 0.15.
+    pad : float, optional
+        Fraction by which to pad axis bounds.
     color : str, optional
         Text color. Defaults to "k".
     compact : bool, optional
@@ -84,27 +91,47 @@ def annot_bars(
     drop_last : int, optional
         Number of bars to ignore on tail end. Defaults to 0.
     """
+    # This is the last-resort dispatch.
+    raise TypeError(f"Expected Axes or ndarray of Axes, got {type(ax)}.")
+
+
+@annot_bars.register
+def _(
+    ax: Axes,
+    dist: float = 0.15,
+    pad: float = 0,
+    color: str = "k",
+    compact: bool = False,
+    orient: str = "h",
+    format_spec: str = "{x:.2f}",
+    fontsize: int = 12,
+    alpha: float = 0.5,
+    drop_last: int = 0,
+) -> NoReturn:
+    """Dispatch for Axes."""
     if not compact:
         dist = -dist
-
-    xb = np.array(ax.get_xbound()) * (1 + abs(2 * dist))
-    ax.set_xbound(*xb)
 
     max_bar = np.abs([b.get_width() for b in ax.patches]).max()
     dist = dist * max_bar
     for bar in ax.patches[: -drop_last or len(ax.patches)]:
         if orient.lower() == "h":
+            xb = np.array(ax.get_xbound()) * (1 + pad)
+            ax.set_xbound(*xb)
             x = bar.get_width()
             x = x + dist if x < 0 else x - dist
             y = bar.get_y() + bar.get_height() / 2
+            text = format_spec.format(x=bar.get_width())
         elif orient.lower() == "v":
+            yb = np.array(ax.get_ybound()) * (1 + pad)
+            ax.set_ybound(*yb)
             x = bar.get_x() + bar.get_width() / 2
             y = bar.get_height()
             y = y + dist if y < 0 else y - dist
+            text = format_spec.format(x=bar.get_height())
         else:
             raise ValueError("`orient` must be 'h' or 'v'")
 
-        text = format_spec.format(x=bar.get_width())
         ax.annotate(
             text,
             (x, y),
@@ -113,14 +140,14 @@ def annot_bars(
             c=color,
             fontsize=fontsize,
             alpha=alpha,
-            **kwargs,
         )
 
 
 @annot_bars.register
 def _(
-    ax: np.ndarray,
+    ax: ndarray,
     dist: float = 0.15,
+    pad: float = 0,
     color: str = "k",
     compact: bool = False,
     orient: str = "h",
@@ -128,9 +155,19 @@ def _(
     fontsize: int = 12,
     alpha: float = 0.5,
     drop_last: int = 0,
-    **kwargs,
-) -> None:
-    """Dispatch for ndarrays"""
-    params = locals()
-    for ax in params.pop("ax").flat:
-        annot_bars(ax, **params)
+) -> NoReturn:
+    """Dispatch for ndarray of Axes."""
+    axs = utils.flat_map(
+        annot_bars,
+        ax,
+        dist=dist,
+        pad=pad,
+        color=color,
+        compact=compact,
+        orient=orient,
+        format_spec=format_spec,
+        fontsize=fontsize,
+        alpha=alpha,
+        drop_last=drop_last,
+    )
+    return axs

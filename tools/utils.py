@@ -416,7 +416,14 @@ def _(data: pd.DataFrame, column: str = None, labels: List = None):
 
 
 def flat_map(func: Callable, arr: np.ndarray, **kwargs):
+    # Record shape
     shape = arr.shape
-    func = partial(func, **kwargs)
-    arr = np.array(list(map(func, arr.flat)), dtype=arr.dtype)
+
+    # Make list
+    flat = [func(x, **kwargs) for x in arr.flat]
+
+    # Construct flat array
+    arr = np.array(flat, dtype=arr.dtype)
+
+    # Reshape in original shape
     return arr.reshape(shape)

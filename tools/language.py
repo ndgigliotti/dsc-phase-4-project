@@ -12,42 +12,32 @@ from typing import (
     List,
     Mapping,
     NoReturn,
-    Sequence,
-    Type,
     Union,
 )
 
 import gensim.parsing.preprocessing as gsp
 import nltk
-from deprecation import deprecated
-from nltk.metrics.association import NGRAM
 import numpy as np
 import pandas as pd
+from deprecation import deprecated
 from fuzzywuzzy.fuzz import WRatio as weighted_ratio
 from fuzzywuzzy.process import extractOne as extract_one
 from IPython.core.display import Markdown, display
 from nltk.corpus import wordnet
-from nltk.sentiment.util import mark_negation as mark_neg
+from nltk.sentiment.util import mark_negation as nltk_mark_neg
 from nltk.stem.porter import PorterStemmer
 from nltk.stem.wordnet import WordNetLemmatizer
 from nltk.tokenize import casual
-from nltk.tokenize.treebank import TreebankWordTokenizer, TreebankWordDetokenizer
-from nltk.metrics import (
-    BigramAssocMeasures,
-    TrigramAssocMeasures,
-    QuadgramAssocMeasures,
-)
+from nltk.tokenize.treebank import TreebankWordDetokenizer, TreebankWordTokenizer
 from numpy import ndarray
-from numpy.lib.function_base import iterable
 from pandas._typing import AnyArrayLike
-from pandas.core.dtypes.inference import is_list_like, is_nested_list_like
 from pandas.core.frame import DataFrame
 from pandas.core.series import Series
 from scipy.sparse import csr_matrix
 from unidecode import unidecode
 
 from . import utils
-from ._validation import _check_1dlike, _validate_docs
+from ._validation import _check_1d, _validate_docs
 from .typing import (
     CallableOnStr,
     Documents,
@@ -65,6 +55,8 @@ NGRAM_FINDERS = MappingProxyType(
         4: nltk.QuadgramCollocationFinder,
     }
 )
+"""Mapping for selecting the right ngram-finder."""
+
 NGRAM_MEASURES = MappingProxyType(
     {
         2: nltk.BigramAssocMeasures,
@@ -72,26 +64,50 @@ NGRAM_MEASURES = MappingProxyType(
         4: nltk.QuadgramAssocMeasures,
     }
 )
-DEFAULT_TOKENIZER = nltk.word_tokenize
-DEFAULT_SEP = "<<"
-CACHE_SIZE = int(5e4)
-tb_tokenize = TreebankWordTokenizer().tokenize
-tb_detokenize = TreebankWordDetokenizer().tokenize
+"""Mapping for selecting the right ngram scoring object."""
 
-# Most filter functions here rely on the generic function `_process`.
-# This allows them to easily handle a wide variety of input types.
+DEFAULT_TOKENIZER = nltk.word_tokenize
+"""Default tokenizer to use when specifying tokenizer is optional."""
+
+DEFAULT_SEP = "<<"
+"""Default separator to use for tagging words."""
+
+CACHE_SIZE = int(5e4)
+"""Maximum number of recent calls to keep for functions with LRU caching."""
+
+tb_tokenize = TreebankWordTokenizer().tokenize
+"""Treebank tokenizer. Useful for tokenize -> process -> detokenize."""
+
+tb_detokenize = TreebankWordDetokenizer().tokenize
+"""Treebank detokenizer. Useful for tokenize -> process -> detokenize."""
 
 
 @singledispatch
 def _process(docs: Documents, func: CallableOnStr, **kwargs) -> Any:
-    """Apply `func` to string or strings.
+    """Apply `func` to a string or iterable of strings (elementwise).
+
+    Most string filtering/processing functions in the language module
+    are polymorphic, capable of handling either a single string (single
+    document), or an iterable of strings (corpus of documents). Whenever
+    possible, they rely on this generic function to apply a callable to
+    documents(s). This allows them to behave polymorphically while having
+    a simple implementation.
+
+    This is a single dispatch generic function, meaning that it consists
+    of multiple specialized sub-functions which each handle a different
+    argument type. When called, the dispatcher checks the type of the first
+    positional argument and then dispatches the sub-function registered
+    for that type. In other words, when the function is called, the call
+    is routed to the appropriate sub-function based on the type of the first
+    positional argument. If no sub-function is registered for a given type,
+    the correct dispatch is determined by the type's method resolution order.
+    The function definition decorated with `@singledispatch` is registered for
+    the `object` type, meaning that it is the dispatcher's last resort.
 
     Parameters
     ----------
-    docs : str or list, Series, ndarray of str
-        Document(s) to map `func` over. Accepts arrays of shape
-        (n_samples,) or (n_samples, 1).
-
+    docs : str, iterable of str
+        Document(s) to map `func` over.
     func : Callable
         Callable for processing `docs`.
     **kwargs
@@ -99,48 +115,53 @@ def _process(docs: Documents, func: CallableOnStr, **kwargs) -> Any:
 
     Returns
     -------
-    str or list, Series, ndarray of str
+    str or list, set, 1darray, Series of str
         Processed string(s), same type as input.
     """
     # This is the fallback dispatch
-    # Try coercing novel iterable to list
-    if isinstance(docs, Iterable):
-        docs = _process(list(docs), func, **kwargs)
-    else:
-        raise TypeError(f"Expected str or iterable of str, got {type(docs)}")
-    return docs
+
+    # Make sure input is valid
+    _validate_docs(docs)
+
+    # Coerce to list
+    return _process(list(docs), func, **kwargs)
 
 
 @_process.register
 def _(docs: list, func: CallableOnStr, **kwargs) -> list:
-    """Dispatch for list"""
-    return list(map(partial(func, **kwargs), docs))
+    """Dispatch for list."""
+    return [func(x, **kwargs) for x in docs]
+
+
+@_process.register
+def _(docs: set, func: CallableOnStr, **kwargs) -> set:
+    """Dispatch for Set."""
+    return {func(x, **kwargs) for x in docs}
 
 
 @_process.register
 def _(docs: Series, func: CallableOnStr, **kwargs) -> Series:
-    """Dispatch for Series"""
+    """Dispatch for Series."""
     return docs.map(partial(func, **kwargs))
 
 
 @_process.register
 def _(docs: ndarray, func: CallableOnStr, **kwargs) -> ndarray:
-    """Dispatch for ndarray"""
-    # Check that shape is (n_samples,) or (n_samples, 1)
-    _check_1dlike(docs)
-
-    # Map over flat array
-    return utils.flat_map(func, docs, **kwargs)
+    """Dispatch for 1darray."""
+    _check_1d(docs)
+    return np.array([func(x, **kwargs) for x in docs])
 
 
 @_process.register
 def _(docs: str, func: CallableOnStr, **kwargs) -> Any:
-    """Dispatch for single string"""
+    """Dispatch for single string."""
     return func(docs, **kwargs)
 
 
 def lowercase(docs: Documents) -> Documents:
     """Convenience function to make letters lowercase.
+
+    Just a named, polymorphic, wrapper around str.lower.
 
     Parameters
     ----------
@@ -159,28 +180,30 @@ def lowercase(docs: Documents) -> Documents:
     return _process(docs, lower)
 
 
-def strip_short(docs: Documents) -> Documents:
-    """Remove words of less than 3 characters.
+def strip_short(docs: Documents, minsize: int = 3) -> Documents:
+    """Remove words with less than `minsize` characters.
 
-    Thin layer over gensim.parsing.preprocessing.strip_short.
+    Polymorphic wrapper for gensim.parsing.preprocessing.strip_short.
 
     Parameters
     ----------
     docs : str or iterable of str
         Document(s) to process.
+    minsize: int, optional
+        Minimum word length in characters; defaults to 3.
 
     Returns
     -------
     str or iterable of str
         Processed document(s).
     """
-    return _process(docs, gsp.strip_short)
+    return _process(docs, gsp.strip_short, minsize=minsize)
 
 
 def strip_multiwhite(docs: Documents) -> Documents:
     """Replace stretches of whitespace with a single space.
 
-    Thin layer over gensim.parsing.preprocessing.strip_multiple_whitespaces.
+    Polymorphic wrapper for gensim.parsing.preprocessing.strip_multiple_whitespaces.
 
     Parameters
     ----------
@@ -198,7 +221,7 @@ def strip_multiwhite(docs: Documents) -> Documents:
 def strip_numeric(docs: Documents) -> Documents:
     """Remove numeric characters.
 
-    Thin layer over gensim.parsing.preprocessing.strip_numeric.
+    Polymorphic wrapper for gensim.parsing.preprocessing.strip_numeric.
 
     Parameters
     ----------
@@ -216,7 +239,7 @@ def strip_numeric(docs: Documents) -> Documents:
 def strip_non_alphanum(docs: Documents) -> Documents:
     """Remove all non-alphanumeric characters.
 
-    Thin layer over gensim.parsing.preprocessing.strip_non_alphanum.
+    Polymorphic wrapper for gensim.parsing.preprocessing.strip_non_alphanum.
 
     Parameters
     ----------
@@ -234,7 +257,7 @@ def strip_non_alphanum(docs: Documents) -> Documents:
 def split_alphanum(docs: Documents) -> Documents:
     """Split up the letters and numerals in alphanumeric sequences.
 
-    Thin layer over gensim.parsing.preprocessing.split_alphanum.
+    Polymorphic wrapper for gensim.parsing.preprocessing.split_alphanum.
 
     Parameters
     ----------
@@ -252,7 +275,7 @@ def split_alphanum(docs: Documents) -> Documents:
 def limit_repeats(docs: Documents) -> Documents:
     """Limit strings of repeating characters (e.g. 'aaaaa') to length 3.
 
-    Thin layer over nltk.tokenize.casual.reduce_lengthening. This is
+    Polymorphic wrapper for nltk.tokenize.casual.reduce_lengthening. This is
     the function used by TweetTokenizer if `reduce_len=True`.
 
     Parameters
@@ -271,7 +294,7 @@ def limit_repeats(docs: Documents) -> Documents:
 def strip_tags(docs: Documents) -> Documents:
     """Remove HTML tags.
 
-    Thin layer over gensim.parsing.preprocessing.strip_tags.
+    Polymorphic wrapper for gensim.parsing.preprocessing.strip_tags.
 
     Parameters
     ----------
@@ -290,6 +313,10 @@ def strip_tags(docs: Documents) -> Documents:
 def stem_text(docs: Documents, lowercase: bool = False) -> Documents:
     """Apply Porter stemming to text.
 
+    Keeps cache to reuse previously computed results. This improves
+    performance if the function is called repeatedly as a step in a
+    preprocessing pipeline.
+
     Parameters
     ----------
     docs : str or iterable of str
@@ -301,17 +328,14 @@ def stem_text(docs: Documents, lowercase: bool = False) -> Documents:
         Processed document(s).
     """
     # This is the dispatch for non-str types.
-    if isinstance(docs, Iterable):
-        docs = _process(docs, stem_text, lowercase=lowercase)
-    else:
-        raise TypeError(f"Expected str or iterable of str, received {type(docs)}.")
-    return docs
+    _validate_docs(docs)
+    return _process(docs, stem_text, lowercase=lowercase)
 
 
 @stem_text.register
 @lru_cache(maxsize=CACHE_SIZE, typed=False)
 def _(docs: str, lowercase: bool = False):
-    """Dispatch for str. Keeps cache for performance."""
+    """Dispatch for str. Keeps cache to reuse previous results."""
     stem = PorterStemmer()
     tokens = tb_tokenize(docs)
     tokens = [stem.stem(x, lowercase) for x in tokens]
@@ -321,7 +345,7 @@ def _(docs: str, lowercase: bool = False):
 def strip_handles(docs: Documents) -> Documents:
     """Remove Twitter @mentions or other similar handles.
 
-    Thin layer over nltk.tokenize.casual.remove_handles.
+    Polymorphic wrapper for nltk.tokenize.casual.remove_handles.
 
     Parameters
     ----------
@@ -333,13 +357,14 @@ def strip_handles(docs: Documents) -> Documents:
     str or iterable of str
         Processed document(s).
     """
+    _validate_docs(docs)
     return _process(docs, casual.remove_handles)
 
 
 def uni2ascii(docs: Documents) -> Documents:
     """Translate Unicode to ASCII in a highly readable way.
 
-    Thin layer over unidecode.unidecode.
+    Polymorphic wrapper for unidecode.unidecode.
 
     Parameters
     ----------
@@ -351,6 +376,7 @@ def uni2ascii(docs: Documents) -> Documents:
     str or iterable of str
         Processed document(s).
     """
+    _validate_docs(docs)
     return _process(docs, unidecode)
 
 
@@ -380,6 +406,7 @@ def strip_punct(
     str or iterable of str
         Processed document(s).
     """
+    _validate_docs(docs)
     if exclude:
         punct = re.sub(fr"[{exclude}]", "", punct)
     re_punct = re.compile(fr"[{re.escape(punct)}]")
@@ -391,7 +418,22 @@ def strip_punct(
 
 
 @singledispatch
-def strip_stopwords(docs: Documents, stopwords: Collection[str]):
+def strip_stopwords(docs: Documents, stopwords: Collection[str]) -> Documents:
+    """Remove stopwords from document(s).
+
+    Parameters
+    ----------
+    docs : Documents
+        Documents for stopword removal.
+    stopwords : collection of str
+        Set of stopwords to remove.
+
+    Returns
+    -------
+    str or iterable of str
+        Documents with stopwords removed.
+    """
+    _validate_docs(docs)
     return _process(docs, strip_stopwords, stopwords=stopwords)
 
 
@@ -418,6 +460,7 @@ def chain_filts(docs: Documents, filts: List[CallableOnStr]) -> Documents:
     Any
         Result of processing. Probably a str, iterable of str, or nested structure.
     """
+    _validate_docs(docs)
     for filt in filts:
         docs = _process(docs, filt)
 
@@ -436,7 +479,40 @@ def scored_ngrams(
     fuse_tuples: bool = True,
     sep: str = " ",
 ) -> Series:
+    """Get Series of collocations and scores.
 
+    Parameters
+    ----------
+    docs : str or iterable of str
+        Documents to scan for ngrams.
+    n : int, optional
+        Size of collocations, by default 2.
+    measure : str, optional
+        Scoring metric to use. Valid options include:
+        'raw_freq', 'pmi', 'mi_like', 'likelihood_ratio',
+        'jaccard', 'poisson_stirling', 'chi_sq', 'student_t'.
+        See nltk.BigramAssocMeasures, nltk.TrigramAssocMeasures,
+        and nltk.QuadgramAssocMeasures for additional size-specific
+        options.
+    tokenizer : callable, optional
+        Callable for tokenizing docs.
+    preprocessor : callable, optional
+        Callable for preprocessing docs before tokenization, by default None.
+    stopwords : collection of str, optional
+        Stopwords to remove from docs, by default None.
+    min_freq : int, optional
+        Drop ngrams below this frequency, by default 0.
+    fuse_tuples : bool, optional
+        Join ngram tuples with `sep`, by default True.
+    sep : str, optional
+        Separator to use for joining ngram tuples, by default " ".
+        Only relevant if `fuze_tuples=True`.
+
+    Returns
+    -------
+    Series
+        Series {ngrams -> scores}.
+    """
     _validate_docs(docs)
     # Coerce docs to list
     if isinstance(docs, (Series, ndarray)):
@@ -454,7 +530,6 @@ def scored_ngrams(
     else:
         raise ValueError(f"Valid `n` values are 2, 3, and 4. Got {n}.")
 
-    
     if preprocessor is not None:
         # Apply preprocessing
         docs = map(preprocessor, docs)
@@ -488,6 +563,7 @@ def _(
     fuse_tuples: bool = True,
     sep: str = " ",
 ) -> Series:
+    """Dispatch for single str."""
     # Process as singleton
     ngram_score = scored_ngrams(
         [docs],
@@ -513,6 +589,39 @@ def scored_bigrams(
     fuse_tuples: bool = True,
     sep: str = " ",
 ) -> Series:
+    """Get Series of bigrams and scores.
+
+    Parameters
+    ----------
+    docs : str or iterable of str
+        Documents to scan for ngrams.
+    n : int, optional
+        Size of collocations, by default 2.
+    measure : str, optional
+        Scoring metric to use. Valid options include:
+        'raw_freq', 'pmi', 'mi_like', 'likelihood_ratio',
+        'jaccard', 'poisson_stirling', 'chi_sq', 'student_t'.
+        See nltk.BigramAssocMeasures for additional size-specific
+        options.
+    tokenizer : callable, optional
+        Callable for tokenizing docs.
+    preprocessor : callable, optional
+        Callable for preprocessing docs before tokenization, by default None.
+    stopwords : collection of str, optional
+        Stopwords to remove from docs, by default None.
+    min_freq : int, optional
+        Drop ngrams below this frequency, by default 0.
+    fuse_tuples : bool, optional
+        Join ngram tuples with `sep`, by default True.
+    sep : str, optional
+        Separator to use for joining ngram tuples, by default " ".
+        Only relevant if `fuze_tuples=True`.
+
+    Returns
+    -------
+    Series
+        Series {ngrams -> scores}.
+    """
     bigram_score = scored_ngrams(
         docs,
         n=2,
@@ -537,6 +646,39 @@ def scored_trigrams(
     fuse_tuples: bool = True,
     sep: str = " ",
 ) -> Series:
+    """Get Series of trigrams and scores.
+
+    Parameters
+    ----------
+    docs : str or iterable of str
+        Documents to scan for ngrams.
+    n : int, optional
+        Size of collocations, by default 2.
+    measure : str, optional
+        Scoring metric to use. Valid options include:
+        'raw_freq', 'pmi', 'mi_like', 'likelihood_ratio',
+        'jaccard', 'poisson_stirling', 'chi_sq', 'student_t'.
+        See nltk.TrigramAssocMeasures for additional size-specific
+        options.
+    tokenizer : callable, optional
+        Callable for tokenizing docs.
+    preprocessor : callable, optional
+        Callable for preprocessing docs before tokenization, by default None.
+    stopwords : collection of str, optional
+        Stopwords to remove from docs, by default None.
+    min_freq : int, optional
+        Drop ngrams below this frequency, by default 0.
+    fuse_tuples : bool, optional
+        Join ngram tuples with `sep`, by default True.
+    sep : str, optional
+        Separator to use for joining ngram tuples, by default " ".
+        Only relevant if `fuze_tuples=True`.
+
+    Returns
+    -------
+    Series
+        Series {ngrams -> scores}.
+    """
     trigram_score = scored_ngrams(
         docs,
         n=3,
@@ -561,6 +703,39 @@ def scored_quadgrams(
     fuse_tuples: bool = True,
     sep: str = " ",
 ) -> Series:
+    """Get Series of quadgrams and scores.
+
+    Parameters
+    ----------
+    docs : str or iterable of str
+        Documents to scan for ngrams.
+    n : int, optional
+        Size of collocations, by default 2.
+    measure : str, optional
+        Scoring metric to use. Valid options include:
+        'raw_freq', 'pmi', 'mi_like', 'likelihood_ratio',
+        'jaccard', 'poisson_stirling', 'chi_sq', 'student_t'.
+        See nltk.QuadgramAssocMeasures for additional size-specific
+        options.
+    tokenizer : callable, optional
+        Callable for tokenizing docs.
+    preprocessor : callable, optional
+        Callable for preprocessing docs before tokenization, by default None.
+    stopwords : collection of str, optional
+        Stopwords to remove from docs, by default None.
+    min_freq : int, optional
+        Drop ngrams below this frequency, by default 0.
+    fuse_tuples : bool, optional
+        Join ngram tuples with `sep`, by default True.
+    sep : str, optional
+        Separator to use for joining ngram tuples, by default " ".
+        Only relevant if `fuze_tuples=True`.
+
+    Returns
+    -------
+    Series
+        Series {ngrams -> scores}.
+    """
     quadgram_score = scored_ngrams(
         docs,
         n=4,
@@ -603,7 +778,10 @@ def chain_funcs(docs: Documents, funcs: List[Callable]) -> Any:
             doc = func(doc)
         return doc
 
-    # Vectorize `process_singular`
+    # Make sure we have all our docs in a row
+    _validate_docs(docs)
+
+    # Make `process_singular` polymorphic
     return _process(docs, process_singular)
 
 
@@ -686,6 +864,9 @@ def space_tokenize(docs: Documents) -> TokenList:
     list of str or iterable of lists of str
         Tokenized document(s).
     """
+    # Make sure docs are good
+    _validate_docs(docs)
+
     re_white = re.compile(r"\s+")
     return _process(docs, re_white.split)
 
@@ -705,6 +886,10 @@ def tokenize_tag(
     Collection[TokenList],
 ]:
     """Tokenize and POS-tag documents.
+
+    Keeps cache to reuse previously computed results. This improves
+    performance if the function is called repeatedly as a step in a
+    preprocessing pipeline.
 
     Parameters
     ----------
@@ -726,17 +911,19 @@ def tokenize_tag(
         Tokenized and tagged document(s).
     """
     # This is the dispatch for non-str types.
-    if isinstance(docs, Iterable):
-        docs = _process(
-            docs,
-            tokenize_tag,
-            tokenizer=tokenizer,
-            fuse_tuples=fuse_tuples,
-            sep=sep,
-            as_tokens=as_tokens,
-        )
-    else:
-        raise TypeError(f"Expected str or iterable of str, got {type(docs)}")
+
+    # Check the docs
+    _validate_docs(docs)
+
+    # Process using dispatch for singular str
+    docs = _process(
+        docs,
+        tokenize_tag,
+        tokenizer=tokenizer,
+        fuse_tuples=fuse_tuples,
+        sep=sep,
+        as_tokens=as_tokens,
+    )
     return docs
 
 
@@ -749,7 +936,7 @@ def _(
     sep: str = DEFAULT_SEP,
     as_tokens: bool = True,
 ) -> Union[str, TokenList, TaggedTokenList]:
-    """Dispatch for str. Keeps cache for performance."""
+    """Dispatch for str. Keeps cache to reuse previous results."""
     # Tuples must be fused if returning a str
     if not as_tokens:
         fuse_tuples = True
@@ -765,8 +952,12 @@ def _(
 
 
 @singledispatch
-def mark_pos(docs: Documents, sep: str = DEFAULT_SEP):
-    """Mark POS in documents.
+def mark_pos(docs: Documents, sep: str = DEFAULT_SEP) -> Documents:
+    """Mark POS in documents with suffix.
+
+    Keeps cache to reuse previously computed results. This improves
+    performance if the function is called repeatedly as a step in a
+    preprocessing pipeline.
 
     Parameters
     ----------
@@ -780,41 +971,75 @@ def mark_pos(docs: Documents, sep: str = DEFAULT_SEP):
     str or collection of str
         POS marked document(s).
     """
-    if isinstance(docs, Iterable):
-        docs = _process(docs, mark_pos, sep=sep)
-    else:
-        raise TypeError(f"Expected str or iterable of str, received {type(docs)}.")
-    return docs
+    # Check the docs
+    _validate_docs(docs)
+
+    # Process using str dispatch
+    return _process(docs, mark_pos, sep=sep)
 
 
 @mark_pos.register
-def _(docs: str, sep: str = DEFAULT_SEP):
-    """Dispatch for str."""
+@lru_cache(maxsize=CACHE_SIZE, typed=False)
+def _(docs: str, sep: str = DEFAULT_SEP) -> Documents:
+    """Dispatch for str. Keeps cache to reuse previous results."""
+    # Get tokens with POS suffixes
     tokens = tokenize_tag(
         docs,
         tokenizer=tb_tokenize,
         fuse_tuples=True,
         sep=sep,
     )
+    # Detokenize and return
     return tb_detokenize(tokens)
 
 
 @singledispatch
-def mark_negation(docs: Documents, sep: str = DEFAULT_SEP) -> Documents:
-    if isinstance(docs, Iterable):
-        docs = _process(docs, mark_negation, sep=sep)
-    else:
-        raise TypeError(f"Expected str or iterable of str, received {type(docs)}.")
-    return docs
+def mark_negation(
+    docs: Documents, double_neg_flip: bool = False, sep: str = DEFAULT_SEP
+) -> Documents:
+    """Mark words '_NEG' which fall between a negating word and punctuation mark.
+
+    Polymorphic wrapper for nltk.sentiment.util.mark_negation. Keeps cache to reuse
+    previously computed results. This improves performance if the function is called
+    repeatedly as a step in a preprocessing pipeline.
+
+    Parameters
+    ----------
+    docs : str or iterable of str
+        Document(s) to mark negation in.
+    double_neg_flip : bool, optional
+        Double negation does not count as negation, false by default.
+    sep : str, optional
+        Separator for 'NEG' suffix.
+
+    Returns
+    -------
+    str or iterable of str
+        Same as input type, with negation marked.
+    """
+    # Check the docs
+    _validate_docs(docs)
+
+    # Process using str dispatch
+    return _process(docs, mark_negation, double_neg_flip=double_neg_flip, sep=sep)
 
 
 @mark_negation.register
 @lru_cache(maxsize=CACHE_SIZE, typed=False)
-def _(docs: str, sep: str = DEFAULT_SEP) -> str:
-    """Dispatch for str. Keeps cache for performance."""
-    docs = mark_neg(tb_tokenize(docs))
+def _(docs: str, double_neg_flip: bool = False, sep: str = DEFAULT_SEP) -> str:
+    """Dispatch for str. Keeps cache to reuse previous results."""
+    # Tokenize with Treebank
+    docs = tb_tokenize(docs)
+
+    # Apply nltk.sentiment.util.mark_negation
+    docs = nltk_mark_neg(tb_tokenize(docs), double_neg_flip=double_neg_flip)
+
+    # Subsitute underscore for our separator
+    re_neg = re.compile(r"_NEG$")
     for i, word in enumerate(docs):
-        docs[i] = re.sub(r"_NEG$", f"{sep}NEG", word)
+        docs[i] = re_neg.sub(f"{sep}NEG", word)
+
+    # Detokenize and return
     return tb_detokenize(docs)
 
 
@@ -822,7 +1047,9 @@ def _(docs: str, sep: str = DEFAULT_SEP) -> str:
 def wordnet_lemmatize(docs: Documents) -> Documents:
     """Lemmatize document(s) using POS-tagging and WordNet lemmatization.
 
-    Tags parts of speech and feeds tagged unigrams into WordNet Lemmatizer.
+    Tag parts of speech and feed tagged unigrams into WordNet Lemmatizer.
+    Keeps cache to reuse previously computed results. This improves performance
+    if the function is called repeatedly as a step in a preprocessing pipeline.
 
     Parameters
     ----------
@@ -835,34 +1062,31 @@ def wordnet_lemmatize(docs: Documents) -> Documents:
 
     Returns
     -------
-    str, list of str (as_tokens), collection of str, collection of list of str (as_tokens)
-        Lemmatized document(s), optionally as token-list(s).
+    str, collection of str
     """
-    # Process iterables using the str dispatch
-    if isinstance(docs, Iterable):
-        lemmatize = partial(wordnet_lemmatize)
-        docs = _process(docs, lemmatize)
-    else:
-        raise TypeError(f"Expected str or iterable of str, got {type(docs)}")
-    return docs
+    # This is the fallback dispatch
+    # Make sure docs are good
+    _validate_docs(docs)
+
+    # Process using the str dispatch
+    return _process(docs, wordnet_lemmatize)
 
 
 @wordnet_lemmatize.register
 @lru_cache(maxsize=CACHE_SIZE, typed=False)
 def _(docs: str) -> str:
-    """Dispatch for str. Keeps cache for performance."""
+    """Dispatch for str. Keeps cache to reuse previous results."""
     # Tokenize and tag POS
     words = tokenize_tag(docs, tokenizer=tb_tokenize)
 
     # Convert Treebank tags to Wordnet tags
-    words, tb_pos = zip(*words)
-    wn_pos = map(treebank2wordnet, tb_pos)
-    words = zip(words, wn_pos)
+    words = [(w, treebank2wordnet(t)) for w, t in words]
 
     # Lemmatize
     wnl = WordNetLemmatizer()
-    words = [wnl.lemmatize(x, y) for x, y in words]
+    words = [wnl.lemmatize(w, t) for w, t in words]
 
+    # Detokenize and return
     return tb_detokenize(words)
 
 
@@ -940,6 +1164,7 @@ def fuzzy_match(
     DataFrame
         Table of matches and scores.
     """
+    # This is the fallback dispatch
     # Try to coerce iterable into Series
     if isinstance(strings, ndarray):
         strings = Series(strings)
@@ -975,6 +1200,8 @@ def frame_doc_vecs(
     doc_index: Union[List, AnyArrayLike] = None,
 ) -> DataFrame:
     """Convert sparse document vectors into a DataFrame with feature labels.
+
+    Designed for use with Scikit-Learn's CountVectorizer or TfidfVectorizer.
 
     Parameters
     ----------
