@@ -25,15 +25,13 @@ It has only three features: the tweet text, the brand object of the sentiment, a
 
 Where there are tweets labeled with an emotion ('Positive' or 'Negative'), but no brand, I fill in the brand using regular expressions. This is only about ~360 tweets. I use the (mostly) human-labeled brand-names for exploratory data analysis, but not for developing the model.
 
-# Modeling
+# Methods and Model
 
-I develop a reasonably accurate logistic regression model after a tremendous amount of grid-searching and attention to detail-oriented work. The final model, whose confusion matrix is produced below, is not as accurate as I would like. Its accuracy is ~0.68, with a balanced accuracy of ~0.67.
+I develop a reasonably accurate logistic regression model after a tremendous amount of grid-searching and detail-oriented work. The final model, whose confusion matrix is produced below, is not as accurate as I would like. Its accuracy is ~0.68, with a balanced accuracy of ~0.67.
 
 <div align="center"><img src="images/output_140_0.png"></div>
  
 The dataset is small and noisy, and I shouldn't expect to obtain a highly accurate model. Nevertheless, I have a good sense of how to improve it. See Future Work for more details.
-
-## Methods
 
 ### TF\*IDF Words
 
