@@ -1,6 +1,8 @@
 import itertools
 import re
 import string
+from collections import defaultdict
+from os.path import normpath
 from functools import lru_cache, partial, singledispatch
 from operator import itemgetter
 from types import MappingProxyType
@@ -17,6 +19,7 @@ from typing import (
 
 import gensim.parsing.preprocessing as gsp
 import nltk
+from nltk.corpus.reader.wordnet import NOUN
 import numpy as np
 import pandas as pd
 from deprecation import deprecated
@@ -67,10 +70,21 @@ NGRAM_MEASURES = MappingProxyType(
 )
 """Mapping for selecting ngram scoring object."""
 
+WORDNET_POS = MappingProxyType(
+    {
+        "ADJ": wordnet.ADJ,
+        "NOUN": wordnet.NOUN,
+        "PRON": wordnet.NOUN,
+        "ADV": wordnet.ADV,
+        "VERB": wordnet.VERB,
+    }
+)
+"""Mapping of Universal POS tags to Wordnet POS tags."""
+
 DEFAULT_TOKENIZER = nltk.word_tokenize
 """Default tokenizer to use when specifying tokenizer is optional."""
 
-DEFAULT_SEP = "<"
+DEFAULT_SEP = "_"
 """Default separator to use for tagging words."""
 
 CACHE_SIZE = int(1e5)
@@ -406,6 +420,7 @@ def strip_punct(
     """
     _validate_docs(docs)
     if exclude:
+        exclude = re.escape(exclude)
         punct = re.sub(fr"[{exclude}]", "", punct)
     re_punct = re.compile(fr"[{re.escape(punct)}]")
 
@@ -828,28 +843,10 @@ def readable_sample(
     display(Markdown(data.to_markdown()))
 
 
-def treebank2wordnet(pos: str) -> str:
-    """Translate Treebank POS tag to Wordnet.
-
-    Inspired by https://stackoverflow.com/questions/15586721.
-
-    Parameters
-    ----------
-    pos : str
-        Treebank part of speech tag.
-
-    Returns
-    -------
-    str
-        Wordnet POS tag.
-    """
-    wordnet_pos = {
-        "J": wordnet.ADJ,
-        "V": wordnet.VERB,
-        "N": wordnet.NOUN,
-        "R": wordnet.ADV,
-    }
-    return wordnet_pos.get(pos[0].upper(), wordnet.NOUN)
+def tagset_info(tagset="upenn_tagset"):
+    path = normpath(f"help/tagsets/{tagset}.pickle")
+    info = DataFrame(nltk.data.load(path), index=["tag_definition", "tag_examples"])
+    return info.T
 
 
 def space_tokenize(docs: Documents) -> TokenList:
@@ -879,6 +876,7 @@ def tokenize_tag(
     docs: Documents,
     tokenizer: Tokenizer = DEFAULT_TOKENIZER,
     tagset: str = None,
+    lang: str = "eng",
     fuse_tuples: bool = False,
     sep: str = DEFAULT_SEP,
     as_tokens: bool = True,
@@ -927,11 +925,19 @@ def tokenize_tag(
         tokenize_tag,
         tokenizer=tokenizer,
         tagset=tagset,
+        lang=lang,
         fuse_tuples=fuse_tuples,
         sep=sep,
         as_tokens=as_tokens,
     )
     return docs
+
+
+def extract_tags(
+    tag_toks: TaggedTokenList, as_string: bool = False
+) -> Union[List[str], str]:
+    _, tags = zip(*tag_toks)
+    return " ".join(tags) if as_string else list(tags)
 
 
 @tokenize_tag.register
@@ -940,6 +946,7 @@ def _(
     docs: str,
     tokenizer: Tokenizer = DEFAULT_TOKENIZER,
     tagset: str = None,
+    lang: str = "eng",
     fuse_tuples: bool = False,
     sep: str = DEFAULT_SEP,
     as_tokens: bool = True,
@@ -951,7 +958,7 @@ def _(
 
     # Tokenize and tag
     docs = tokenizer(docs)
-    docs = nltk.pos_tag(docs, tagset=tagset)
+    docs = nltk.pos_tag(docs, lang=lang, tagset=tagset)
 
     if fuse_tuples:
         # Fuse tuples
@@ -1088,17 +1095,17 @@ def wordnet_lemmatize(docs: Documents) -> Documents:
 def _(docs: str) -> str:
     """Dispatch for str. Keeps cache to reuse previous results."""
     # Tokenize and tag POS
-    words = tokenize_tag(docs, tokenizer=tb_tokenize)
+    tag_toks = tokenize_tag(docs, tokenizer=tb_tokenize, tagset="universal")
 
-    # Convert Treebank tags to Wordnet tags
-    words = [(w, treebank2wordnet(t)) for w, t in words]
-
+    # Convert universal tags to Wordnet tags
+    univ2wordnet = defaultdict(lambda: wordnet.NOUN, **WORDNET_POS)
+    tag_toks = [(w, univ2wordnet[t]) for w, t in tag_toks]
     # Lemmatize
     wnl = WordNetLemmatizer()
-    words = [wnl.lemmatize(w, t) for w, t in words]
+    toks = [wnl.lemmatize(w, t) for w, t in tag_toks]
 
     # Detokenize and return
-    return tb_detokenize(words)
+    return tb_detokenize(toks)
 
 
 def locate_patterns(

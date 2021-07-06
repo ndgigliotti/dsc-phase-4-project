@@ -6,8 +6,9 @@ from typing import Callable, Dict, List, Sequence, Tuple, Union
 import joblib
 import numpy as np
 import pandas as pd
-from feature_engine.selection import \
-    SmartCorrelatedSelection as SmartCorrelatedSelectionFE
+from feature_engine.selection import (
+    SmartCorrelatedSelection as SmartCorrelatedSelectionFE,
+)
 from IPython.core.display import HTML
 from IPython.display import display
 from numpy import ndarray
@@ -16,9 +17,14 @@ from pandas.core.frame import DataFrame
 from pandas.core.series import Series
 from sklearn.base import BaseEstimator
 from sklearn.experimental import enable_halving_search_cv
-from sklearn.model_selection import (GridSearchCV, HalvingGridSearchCV,
-                                     HalvingRandomSearchCV, RandomizedSearchCV)
+from sklearn.model_selection import (
+    GridSearchCV,
+    HalvingGridSearchCV,
+    HalvingRandomSearchCV,
+    RandomizedSearchCV,
+)
 from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import FunctionTransformer
 from sklearn.utils.validation import check_is_fitted
 
 from .. import utils
@@ -287,8 +293,25 @@ def load_results(
         df.columns = df.columns.str.replace("test_score", "score", regex=False)
         if df.index.name is not None:
             df.index.name = df.index.name.replace("test_score", "score")
+    df = df.applymap(_func_xformers_to_str)
     return df
 
+
+def _func_xformers_to_str(x):
+    if isinstance(x, FunctionTransformer):
+        name = x.func.__name__
+        if x.kw_args is not None:
+            kwargs = ", ".join([f"{k}={repr(v)}" for k, v in x.kw_args.items()])
+        else:
+            kwargs = ""
+        x = f"{name}({kwargs})"
+    return x
+
+def load_best_params(path):
+    if ".joblib" not in path:
+        path = f"{path}.joblib"
+    search = joblib.load(os.path.normpath(path))
+    return search.best_params_
 
 class SmartCorrelatedSelection(SmartCorrelatedSelectionFE):
     """Wrapper for feature_engine.selection.SmartCorrelatedSelection."""

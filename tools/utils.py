@@ -1,12 +1,16 @@
 import inspect
-from functools import partial, singledispatch
-from typing import Callable, List, Union
-from deprecation import deprecated
+from functools import singledispatch
+from typing import Callable, Collection, List, Union
 
 import numpy as np
 import pandas as pd
 from pandas._typing import ArrayLike, FrameOrSeries
 from pandas.api.types import is_list_like
+from pandas.core.frame import DataFrame
+from pandas.core.generic import NDFrame
+from pandas.core.series import Series
+from sklearn.preprocessing import FunctionTransformer
+from numpy import ndarray
 
 NULL = frozenset([np.nan, pd.NA, None])
 
@@ -339,50 +343,109 @@ def bitgen(seed: Union[None, int, ArrayLike] = None):
     return np.random.default_rng(seed).bit_generator
 
 
-@deprecated(details="Use overloaded `get_func_name`")
-def get_func_names(funcs: List[Callable]):
-    return get_func_name
-
-
 @singledispatch
-def get_func_name(func: Callable):
+def get_func_name(
+    func: Union[
+        Callable,
+        FunctionTransformer,
+        Collection[Callable],
+        Collection[FunctionTransformer],
+    ]
+) -> Union[str, Collection[str]]:
+    """Get function name(s) from function-like objects.
+
+    Parameters
+    ----------
+    func : Callable, FunctionTransformer, collection of
+        Function-like object(s) to get names of.
+
+    Returns
+    -------
+    str or collection of
+        Function name(s).
+    """
     if hasattr(func, "pyfunc"):
         name = get_func_name(func.pyfunc)
     elif hasattr(func, "func"):
         name = get_func_name(func.func)
-    else:
+    elif isinstance(func, Callable):
         name = func.__name__
+    else:
+        raise TypeError(
+            f"Expected Callable or FunctionTransformer but encountered {type(func)}."
+        )
     return name
 
 
 @get_func_name.register
-def _(func: pd.Series):
+def _(func: FunctionTransformer) -> str:
+    return get_func_name(func.func)
+
+
+@get_func_name.register
+def _(func: Series) -> pd.Series:
     return func.map(get_func_name)
 
 
 @get_func_name.register
-def _(func: np.ndarray):
+def _(func: ndarray) -> ndarray:
     return flat_map(get_func_name, func)
 
 
 @get_func_name.register
-def _(func: list):
+def _(func: list) -> list:
     return [get_func_name(x) for x in func]
 
 
-def implode(data: pd.Series):
+def implode(data: Series) -> Series:
+    """Retract "exploded" Series into Series of list-likes.
+
+    Parameters
+    ----------
+    data : Series
+        Exploded Series.
+
+    Returns
+    -------
+    Series
+        Series with values retracted into list-likes.
+    """
     new_data = dict.fromkeys(data.index)
     for key in new_data:
         val = data.loc[key]
-        if isinstance(val, (pd.Series, pd.DataFrame)):
+        if isinstance(val, (Series, DataFrame)):
             new_data[key] = val.to_list()
         else:
             new_data[key] = [val]
-    return pd.Series(new_data, name=data.name)
+    return Series(new_data, name=data.name)
 
 
 @singledispatch
-def expand(data: pd.Series, column: str = None, labels: List = None):
+def expand(data: NDFrame, column: str = None, labels: List[str] = None) -> DataFrame:
+    """Expand a column of length-N list-likes into N columns.
+
+    Parameters
+    ----------
+    data : Series or DataFrame
+        Series or DataFrame with column to expand.
+    column : str, optional
+        Column of length-N list-likes to expand into N columns, by default None.
+        Only relevant for DataFrame input.
+    labels : list of str, optional
+        Labels for new columns (must provide N labels), by default None
+
+    Returns
+    -------
+    DataFrame
+        Expanded frame.
+    """
+    # This is the fallback dispatch.
+    raise TypeError(f"Expected Series or DataFrame, got {type(data)}.")
+
+
+@expand.register
+def _(data: Series, column: str = None, labels: List[str] = None) -> DataFrame:
+    """Dispatch for Series. Expands into DataFrame."""
     if not data.map(is_list_like).all():
         raise ValueError("Elements must all be list-like")
     if not data.map(len).nunique() == 1:
@@ -396,16 +459,17 @@ def expand(data: pd.Series, column: str = None, labels: List = None):
         if data.name is not None:
             labels = [f"{data.name}_{x}" for x in labels]
     col_data = dict(zip(labels, col_data))
-    return pd.DataFrame(col_data, index=data.index)
+    return DataFrame(col_data, index=data.index)
 
 
 @expand.register
-def _(data: pd.DataFrame, column: str = None, labels: List = None):
+def _(data: DataFrame, column: str = None, labels: List[str] = None) -> DataFrame:
+    """Dispatch for DataFrame. Returns DataFrame."""
     if data.columns.value_counts()[column] > 1:
         raise ValueError("`column` must be unique in DataFrame")
     if column is None:
         raise ValueError("Must pass `column` if input is DataFrame")
-    expanded = expand(data.loc[:, column])
+    expanded = expand(data.loc[:, column], labels=labels)
     insert_at = data.columns.get_loc(column)
     data = data.drop(columns=column)
     for i, label in enumerate(expanded.columns):

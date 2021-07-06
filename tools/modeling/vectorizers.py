@@ -1,20 +1,22 @@
-import enum
+from functools import lru_cache
 from typing import Callable
+from types import MappingProxyType
+
 import numpy as np
 import pandas as pd
-import nltk
-from nltk.sentiment.vader import SentimentIntensityAnalyzer
 from gensim.models.doc2vec import Doc2Vec, TaggedDocument
-
-from sklearn.base import BaseEstimator, TransformerMixin
-from sklearn.feature_extraction.text import _VectorizerMixin
-from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import FunctionTransformer, Normalizer, Binarizer
-from sklearn.utils.validation import check_is_fitted
-from .._validation import _validate_raw_docs
+from nltk.sentiment.vader import SentimentIntensityAnalyzer
 from scipy.sparse import csr_matrix
+from sklearn.base import BaseEstimator, TransformerMixin
+from sklearn.feature_extraction.text import CountVectorizer, HashingVectorizer, TfidfVectorizer, _VectorizerMixin
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import FunctionTransformer, Normalizer
+from sklearn.utils.validation import check_is_fitted
+
+from .._validation import _validate_raw_docs
 from ..typing import CallableOnStr
 
+SK_VECTORIZERS = MappingProxyType({"tfidf": TfidfVectorizer, "count": CountVectorizer, "hashing": HashingVectorizer})
 
 class TokenizingVectorizer(TransformerMixin, _VectorizerMixin, BaseEstimator):
     """Vectorizer base class with the standard Scikit-Learn pre/post processing.
@@ -63,10 +65,6 @@ class TokenizingVectorizer(TransformerMixin, _VectorizerMixin, BaseEstimator):
             post_pipe.set_params(norm=Normalizer(norm=self.norm, copy=False))
         return post_pipe
 
-    def analyze_docs(self, X):
-        analyzer = self.build_analyzer()
-        return map(analyzer, X)
-
     def fit(self, X, y=None):
         # Triggers a parameter validation
         _validate_raw_docs(X)
@@ -77,6 +75,8 @@ class TokenizingVectorizer(TransformerMixin, _VectorizerMixin, BaseEstimator):
     def transform(self, X):
         _validate_raw_docs(X)
         self._validate_params()
+        analyzer = self.build_analyzer()
+        X = map(analyzer, X)
         return X
 
     def fit_transform(self, X, y=None):
@@ -186,8 +186,8 @@ class Doc2Vectorizer(TokenizingVectorizer):
         _validate_raw_docs(X)
         self._warn_for_unused_params()
         self._validate_params()
-
-        docs = list(self.analyze_docs(X))
+        analyzer = self.build_analyzer()
+        docs = [analyzer(doc) for doc in X]
         tagged_docs = [TaggedDocument(words, [i]) for i, words in enumerate(docs)]
         self.gensim_model_ = Doc2Vec(
             documents=tagged_docs,
@@ -233,7 +233,8 @@ class Doc2Vectorizer(TokenizingVectorizer):
         _validate_raw_docs(X)
         if isinstance(X, (np.ndarray, pd.Series, pd.DataFrame)):
             X = X.squeeze().tolist()
-        docs = list(self.analyze_docs(X))
+        analyzer = self.build_analyzer()
+        docs = [analyzer(doc) for doc in X]
         vecs = [self.gensim_model_.infer_vector(doc) for doc in docs]
         vecs = np.reshape(np.array(vecs), (len(docs), self.gensim_model_.vector_size))
         post_pipe = self.build_post_pipe()
@@ -274,6 +275,7 @@ class VaderVectorizer(BaseEstimator, TransformerMixin):
         self.preprocessor = preprocessor
         self.norm = norm
         self.sparse = sparse
+        self.vader = SentimentIntensityAnalyzer()
 
     def build_post_pipe(self):
         """Construct postprocessing pipeline based on parameters."""
@@ -285,6 +287,17 @@ class VaderVectorizer(BaseEstimator, TransformerMixin):
         if self.sparse:
             post_pipe.set_params(spar=FunctionTransformer(csr_matrix))
         return post_pipe
+
+    # def _init_caching_scorer(self, cache_size):
+    #     vader = SentimentIntensityAnalyzer()
+
+    #     @lru_cache(maxsize=cache_size, typed=False)
+    #     def scorer(text):
+    #         return pd.Series(vader.polarity_scores(text))
+
+    #     return vader, scorer
+    def polarity_scores(self, text):
+        return pd.Series(self.vader.polarity_scores(text))
 
     def _validate_params(self):
         """Validate some parameters."""
@@ -329,9 +342,7 @@ class VaderVectorizer(BaseEstimator, TransformerMixin):
             docs = self.preprocessor(docs)
 
         # Perform VADER analysis
-        sia = SentimentIntensityAnalyzer()
-        vecs = [pd.Series(sia.polarity_scores(x)) for x in docs]
-        vecs = pd.DataFrame(vecs)
+        vecs = pd.DataFrame([self.polarity_scores(x) for x in docs])
         if self.compound_only:
             vecs = vecs.loc[:, ["comp"]]
         if self.category_only:

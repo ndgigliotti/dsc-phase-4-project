@@ -1,10 +1,12 @@
+from os.path import normpath
 from types import MappingProxyType
-from typing import Tuple
+from typing import Tuple, Union
 
 import numpy as np
 import pandas as pd
 import seaborn as sns
 from matplotlib import pyplot as plt
+from matplotlib.figure import Figure
 from sklearn.preprocessing import minmax_scale
 
 from ..typing import SeedLike
@@ -160,3 +162,9 @@ def cat_palette(
         else:
             np.random.default_rng(seed).shuffle(pal)
     return dict(zip(keys, pal))
+
+
+def save(fig: Figure, dst: str, bbox_inches: Union[str, float] = "tight", **kwargs):
+    dst = normpath(dst)
+    fig.savefig(dst, bbox_inches=bbox_inches)
+    return dst
