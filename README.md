@@ -27,7 +27,7 @@ Where there are tweets labeled with an emotion ('Positive' or 'Negative'), but n
 
 # Modeling
 
-I develop a reasonably accurate logistic regression model after a tremendous amount of grid-searching and attention to minor details. The final model, whose confusion matrix is produced below, is not as accurate as I would like. Its accuracy is ~0.68, with a balanced accuracy of ~0.67.
+I develop a reasonably accurate logistic regression model after a tremendous amount of grid-searching and attention to detail-oriented work. The final model, whose confusion matrix is produced below, is not as accurate as I would like. Its accuracy is ~0.68, with a balanced accuracy of ~0.67.
 
 <div align="center"><img src="images/output_140_0.png"></div>
  
