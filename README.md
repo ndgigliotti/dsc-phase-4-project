@@ -31,7 +31,7 @@ I develop a reasonably accurate logistic regression model after a tremendous amo
 
 <div align="center"><img src="images/output_140_0.png"></div>
  
-This dataset is very small and noisy, and I shouldn't expect to obtain a highly accurate model. Nevertheless, I have a good sense of how to improve it. See Future Work for more details.
+The dataset is small and noisy, and I shouldn't expect to obtain a highly accurate model. Nevertheless, I have a good sense of how to improve it. See Future Work for more details.
 
 ## Methods
 
