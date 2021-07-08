@@ -4,6 +4,8 @@ from types import MappingProxyType
 
 import numpy as np
 import pandas as pd
+import nltk
+from nltk.corpus import stopwords
 from gensim.models.doc2vec import Doc2Vec, TaggedDocument
 from nltk.sentiment.vader import SentimentIntensityAnalyzer
 from scipy.sparse import csr_matrix
@@ -18,6 +20,70 @@ from ..typing import CallableOnStr
 
 SK_VECTORIZERS = MappingProxyType({"tfidf": TfidfVectorizer, "count": CountVectorizer, "hashing": HashingVectorizer})
 
+class TokenizingVectorizer2(TransformerMixin, BaseEstimator):
+    """Vectorizer base class with the standard Scikit-Learn pre/post processing.
+
+    This is an easily extensible base class which provides the pre-processing machinery of
+    Scikit-Learn's HashingVectorizer, CountVectorizer, and TfidfVectorizer. It also
+    includes normalization as a post-processing option.
+
+    """
+
+    def __init__(
+        self,
+        *,
+        input="content",
+        encoding="utf-8",
+        decode_error="strict",
+        strip_accents=None,
+        lowercase=True,
+        preprocessor=None,
+        tokenizer=nltk.word_tokenize,
+        stop_words=None,
+        ngram_range=(1, 1),
+        analyzer="word",
+        norm="l2",
+    ):
+        # associated with pre/post-processing
+        self.input = input
+        self.encoding = encoding
+        self.decode_error = decode_error
+        self.strip_accents = strip_accents
+        self.preprocessor = preprocessor
+        self.tokenizer = tokenizer
+        self.analyzer = analyzer
+        self.lowercase = lowercase
+        self.token_pattern = None
+        self.stop_words = stop_words
+        self.ngram_range = ngram_range
+        self.norm = norm
+
+    def build_post_pipe(self):
+        post_pipe = Pipeline([("norm", None)])
+        if self.norm is not None:
+            post_pipe.set_params(norm=Normalizer(norm=self.norm, copy=False))
+        return post_pipe
+
+    def fit(self, X, y=None):
+        # Triggers a parameter validation
+        _validate_raw_docs(X)
+        self._warn_for_unused_params()
+        self._validate_params()
+        return self
+
+    def transform(self, X):
+        _validate_raw_docs(X)
+        self._validate_params()
+        analyzer = self.build_analyzer()
+        X = map(analyzer, X)
+        return X
+
+    def fit_transform(self, X, y=None):
+        return self.fit(X, y).transform(X)
+
+    def _more_tags(self):
+        return {"X_types": ["string"]}
+        
 class TokenizingVectorizer(TransformerMixin, _VectorizerMixin, BaseEstimator):
     """Vectorizer base class with the standard Scikit-Learn pre/post processing.
 
@@ -115,11 +181,9 @@ class Doc2Vectorizer(TokenizingVectorizer):
         dbow_words=0,
         dm_concat=0,
         dm_tag_count=1,
-        docvecs=None,
-        docvecs_mapfile=None,
         comment=None,
         trim_rule=None,
-        size=100,
+        vector_size=100,
         alpha=0.025,
         window=5,
         min_count=5,
@@ -158,13 +222,11 @@ class Doc2Vectorizer(TokenizingVectorizer):
         self.dbow_words = dbow_words
         self.dm_concat = dm_concat
         self.dm_tag_count = dm_tag_count
-        self.docvecs = docvecs
-        self.docvecs_mapfile = docvecs_mapfile
         self.comment = comment
         self.trim_rule = trim_rule
 
         # Related to gensim.models.Word2Vec
-        self.size = size
+        self.vector_size = vector_size
         self.alpha = alpha
         self.window = window
         self.min_count = min_count
@@ -196,11 +258,9 @@ class Doc2Vectorizer(TokenizingVectorizer):
             dbow_words=self.dbow_words,
             dm_concat=self.dm_concat,
             dm_tag_count=self.dm_tag_count,
-            docvecs=self.docvecs,
-            docvecs_mapfile=self.docvecs_mapfile,
             comment=self.comment,
             trim_rule=self.trim_rule,
-            vector_size=self.size,
+            vector_size=self.vector_size,
             alpha=self.alpha,
             window=self.window,
             min_count=self.min_count,
@@ -222,8 +282,8 @@ class Doc2Vectorizer(TokenizingVectorizer):
     def get_docvecs(self):
         check_is_fitted(self)
         vecs = [
-            self.gensim_model_.docvecs[i]
-            for i in range(self.gensim_model_.docvecs.max_rawint + 1)
+            self.gensim_model_.dv[i]
+            for i in range(self.gensim_model_.dv.max_rawint + 1)
         ]
         post_pipe = self.build_post_pipe()
         return post_pipe.fit_transform(vecs)
