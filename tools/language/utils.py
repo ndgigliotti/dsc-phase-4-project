@@ -102,8 +102,6 @@ def chain_processors(docs: Documents, funcs: List[Callable]) -> Any:
     # as long as the first function takes a str argument.
     def process_singular(doc):
         for func in funcs:
-            if not doc:
-                break
             doc = func(doc)
         return doc
 
