@@ -1,1 +1,1 @@
-import tools.modeling.classification.diagnostics
+from . import diagnostics
