@@ -1,14 +1,20 @@
 import os
 import tempfile
 from operator import itemgetter
-from typing import Callable, Dict, List, Sequence, Tuple, Union
+from typing import (
+    Callable,
+    Dict,
+    List,
+    Mapping,
+    Sequence,
+    Tuple,
+    Union,
+)
 
 import joblib
 import numpy as np
 import pandas as pd
-from feature_engine.selection import (
-    SmartCorrelatedSelection as SmartCorrelatedSelectionFE,
-)
+
 from IPython.core.display import HTML
 from IPython.display import display
 from numpy import ndarray
@@ -25,15 +31,15 @@ from sklearn.model_selection import (
 )
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import FunctionTransformer
-from sklearn.utils.validation import check_is_fitted
 
-from .. import utils
-
-Variables = Union[None, int, str, List[Union[str, int]]]
+from ... import utils
 
 
-def _to_pickle(obj: object, dst: str, test: bool = False) -> str:
-    """Pickle an object via Joblib.
+ParamSpaceSpec = Union[Dict[str, List], List[Dict[str, List]]]
+
+
+def _to_joblib(obj: object, dst: str, test: bool = False) -> str:
+    """Serialize an object via Joblib.
 
     Parameters
     ----------
@@ -43,8 +49,8 @@ def _to_pickle(obj: object, dst: str, test: bool = False) -> str:
         Filepath of file to create. Directories will also be created
         if necessary.
     test : bool, optional
-        Pickles object to a temporary file to see if pickling errors
-        are raised. The file is immediately removed. By default False.
+        Saves object to a temporary file to see if any errors are raised
+        during serialization. The file is immediately removed. By default False.
 
     Returns
     -------
@@ -75,9 +81,48 @@ def _to_pickle(obj: object, dst: str, test: bool = False) -> str:
     return dst
 
 
+def _prep_param_space(
+    param_space: ParamSpaceSpec, add_prefix: str = None
+) -> ParamSpaceSpec:
+    """Prepare a parameter space specification for the search estimator.
+
+    Parameters
+    ----------
+    param_space : dict, list of dict
+        Parameter space specification. Similar types will be coerced to dict or list of dict.
+    add_prefix : str, optional
+        Prefix to add to all parameter names, by default None.
+
+    Returns
+    -------
+    dict or list of dict
+        Preprocessed parameter space.
+    """
+    if add_prefix is None:
+        add_prefix = ""
+    # Coerce Sequence to list of dict and add prefix
+    if isinstance(param_space, Sequence):
+        param_space = list(param_space)
+        for i, sub_space in enumerate(param_space):
+            param_space[i] = {f"{add_prefix}{k}": v for k, v in sub_space.items()}
+    # Coerce Series to dict and add prefix
+    elif isinstance(param_space, pd.Series):
+        param_space = param_space.add_prefix(add_prefix).to_dict()
+    # Coerce Mapping to dict and add prefix
+    elif isinstance(param_space, Mapping):
+        param_space = dict(param_space)
+        param_space = {f"{add_prefix}{k}": v for k, v in param_space.items()}
+    # Error if unexpected type
+    else:
+        raise TypeError(
+            f"Expected mapping, Series, or list thereof, got {type(param_space)}."
+        )
+    return param_space
+
+
 def sweep(
     estimator: Union[BaseEstimator, Pipeline],
-    param_space: Union[Dict, List[Dict], Series],
+    param_space: ParamSpaceSpec,
     *,
     X: Union[DataFrame, Series, ndarray],
     y: Union[Series, ndarray],
@@ -88,6 +133,7 @@ def sweep(
     refit: bool = False,
     cv: int = None,
     kind: str = "grid",
+    add_prefix: str = None,
     verbose: int = 1,
     pre_dispatch: str = "2*n_jobs",
     error_score: float = np.nan,
@@ -100,25 +146,25 @@ def sweep(
     aggressive_elimination: bool = False,
     **kwargs,
 ) -> str:
-    """Fit and pickle any Scikit-Learn search estimator.
+    """Fit and serialize any Scikit-Learn search estimator.
 
-    Fit and pickle a GridSearchCV, HalvingGridSearchCV, RandomizedSearchCV,
-    or HalvingRandomSearchCV object. Immediately saving the search estimator
-    helps prevent losing the results. See the Scikit-Learn documentation on
-    the aforementioned search estimators for more details on their parameters.
+    Fit and save a `GridSearchCV`, `HalvingGridSearchCV`, `RandomizedSearchCV`,
+    or `HalvingRandomSearchCV` object. Immediately saving the search estimator
+    via Joblib helps prevent losing the results. See the Scikit-Learn documentation
+    on the aforementioned search estimators for more details on their parameters.
 
     Parameters
     ----------
-    estimator : Union[BaseEstimator, Pipeline]
+    estimator : estimator or Pipeline
         Estimator or pipeline ending with estimator.
-    param_space : Union[Dict, List[Dict], Series]
+    param_space : dict, list of dict
         Specification of the parameter search space.
     X : Union[DataFrame, Series, ndarray]
         Independent variables.
     y : Union[Series, ndarray]
         Target variable.
     dst : str
-        Output filepath.
+        Output filepath. If no extension, automatically adds '.joblib'.
     scoring : Union[str, Callable, List, Tuple, Dict], optional
         Metric name(s) or callable(s) to be passed to search estimator.
     n_jobs : int, optional
@@ -141,6 +187,8 @@ def sweep(
             * 'hrand' - HalvingRandomSearchCV
     verbose : int, optional
         Print out details about the search, by default 1.
+    add_prefix : str, optional
+        Prefix to add to all parameter names.
     pre_dispatch : str, optional
         Controls the number of jobs that get dispatched during parallel
         execution, by default "2*n_jobs".
@@ -188,9 +236,8 @@ def sweep(
     except KeyError:
         raise ValueError("Valid kinds are 'grid', 'hgrid', 'rand', and 'hrand'.")
 
-    # Convert param space to dict
-    if isinstance(param_space, pd.Series):
-        param_space = param_space.to_dict()
+    # Coerce to dict or list of dict and add prefix
+    param_space = _prep_param_space(param_space, add_prefix=add_prefix)
 
     # Filter out the relevant parameters
     relevant = pd.Series(locals()).drop("kwargs")
@@ -202,12 +249,12 @@ def sweep(
     search = cls(**relevant)
 
     # Test pickling search estimator before fitting
-    _to_pickle(search, dst, test=True)
+    _to_joblib(search, dst, test=True)
 
     search.fit(X, y)
 
     # Pickle search estimator
-    filename = _to_pickle(search, dst)
+    filename = _to_joblib(search, dst)
 
     return filename
 
@@ -218,18 +265,18 @@ def load_results(
     drop_splits: bool = True,
     short_names: bool = True,
     drop_dicts: bool = True,
-    stats: Sequence[str] = ("mean_test_score", "rank_test_score"),
+    stats: Sequence[str] = ("mean_fit_time", "mean_test_score", "rank_test_score"),
     rank_index: bool = False,
 ) -> DataFrame:
     """Load stripped-down version of search results from pickle.
 
-    Retrieves the `cv_results_` from a pickled, fitted, search estimator
+    Retrieves the `cv_results_` from a serialized, fitted, search estimator
     and optionally trims it down for quick readability.
 
     Parameters
     ----------
     path : str
-        Filename of pickled search estimator.
+        Filename of serialized search estimator.
     drop_splits : bool, optional
         Drop the columns of individual cross validation splits. By default True.
     short_names : bool, optional
@@ -298,6 +345,7 @@ def load_results(
 
 
 def _func_xformers_to_str(x):
+    """Convert FunctionTransformer to pretty string, otherwise do nothing."""
     if isinstance(x, FunctionTransformer):
         name = x.func.__name__
         if x.kw_args is not None:
@@ -307,60 +355,64 @@ def _func_xformers_to_str(x):
         x = f"{name}({kwargs})"
     return x
 
-def load_best_params(path):
+
+def load_best_params(path: str) -> dict:
+    """Return best parameters from serialized search estimator.
+
+    Parameters
+    ----------
+    path : str
+        Path to serialized search estimator.
+        Adds '.joblib' extension if not given.
+
+    Returns
+    -------
+    dict
+        Dict of best parameters.
+    """
     if ".joblib" not in path:
         path = f"{path}.joblib"
     search = joblib.load(os.path.normpath(path))
     return search.best_params_
 
-class SmartCorrelatedSelection(SmartCorrelatedSelectionFE):
-    """Wrapper for feature_engine.selection.SmartCorrelatedSelection."""
 
-    def __init__(
-        self,
-        variables: Variables = None,
-        method: str = "pearson",
-        threshold: float = 0.8,
-        missing_values: str = "ignore",
-        selection_method: str = "missing_values",
-        estimator=None,
-        scoring: str = "roc_auc",
-        cv: int = 3,
-        verbose: bool = False,
-    ):
-        super().__init__(
-            variables=variables,
-            method=method,
-            threshold=threshold,
-            missing_values=missing_values,
-            selection_method=selection_method,
-            estimator=estimator,
-            scoring=scoring,
-            cv=cv,
-        )
-        self.verbose = verbose
+def param_space_size(param_space: ParamSpaceSpec, n_folds=5) -> Series:
+    """Return number of parameters, number of combos, number of fits.
 
-    @property
-    def selected_features_(self):
-        check_is_fitted(self)
-        corr_superset = set().union(*self.correlated_feature_sets_)
-        return list(corr_superset.difference(self.features_to_drop_))
+    Parameters
+    ----------
+    param_space : dict or list of dict
+        Parameter space specification.
+    n_folds : int, optional
+        Number of cross-validation folds for for calculating
+        number of fits by exhaustive search. By default 5.
 
-    def show_report(self):
-        check_is_fitted(self)
-        name = self.__class__.__name__
-        info = [
-            pd.Series(self.selected_features_, name="Selected"),
-            pd.Series(self.features_to_drop_, name="Rejected"),
-        ]
-        info = pd.concat(info, axis=1)
-        name = self.__class__.__name__
-        info = info.T.to_html(na_rep="", header=False, max_cols=6, notebook=True)
-        info = f"<h4>{name}</h4>{info}"
-        display(HTML(info))
-
-    def fit(self, X: pd.DataFrame, y: pd.Series = None):
-        super().fit(X, y=y)
-        if self.verbose:
-            self.show_report()
-        return self
+    Returns
+    -------
+    Series
+        Description of parameter space size.
+    """
+    if isinstance(param_space, Sequence):
+        n_combos = 0
+        params = {}
+        for sub_space in param_space:
+            params.add(sub_space.keys())
+            combos = utils.cartesian(*sub_space.values())
+            n_combos += combos.shape[0]
+        n_params = len(params)
+    elif isinstance(param_space, pd.Series):
+        combos = utils.cartesian(*param_space.to_list())
+        n_combos, n_params = combos.shape
+    elif isinstance(param_space, Mapping):
+        combos = utils.cartesian(*param_space.values())
+        n_combos, n_params = combos.shape
+    else:
+        raise TypeError(f"Expected dict or list of dicts, got {type(param_space)}.")
+    return pd.Series(
+        {
+            "n_params": n_params,
+            "n_combos": n_combos,
+            "n_folds": n_folds,
+            "n_fits": n_combos * n_folds,
+        }
+    )
