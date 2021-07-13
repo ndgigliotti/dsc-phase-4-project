@@ -1,18 +1,21 @@
 from functools import lru_cache, partial, singledispatch, singledispatchmethod
 from typing import Collection, List, NoReturn, Tuple, Union
-import nltk
 
+import nltk
 import numpy as np
 import pandas as pd
+from gensim.models.phrases import Phraser, Phrases
 from nltk.tokenize.casual import TweetTokenizer as NLTKTweetTokenizer
 from scipy.sparse import csr_matrix
 from sklearn.base import BaseEstimator, TransformerMixin
+from sklearn.exceptions import NotFittedError
 from sklearn.feature_extraction.text import _VectorizerMixin
 from sklearn.preprocessing import FunctionTransformer
 from sklearn.utils import as_float_array
 from sklearn.utils.validation import check_is_fitted
+
 from .._validation import _validate_raw_docs
-from ..language import extract_tags, tokenize_tag
+from ..language import extract_tags, moses_detokenize, tokenize_tag
 
 # The following partial objects are shorthand callables
 # for constructing commonly used estimators.
@@ -43,11 +46,13 @@ class DummyEncoder(BaseEstimator, TransformerMixin):
         drop_first=False,
         dtype=np.float64,
     ):
-        for key, value in locals().items():
-            if key == "self":
-                continue
-            else:
-                setattr(self, key, value)
+        self.prefix=prefix,
+        self.prefix_sep=prefix_sep,
+        self.dummy_na=dummy_na,
+        self.columns=columns,
+        self.sparse=sparse,
+        self.drop_first=drop_first,
+        self.dtype=dtype,
 
     def fit(self, X, y=None):
         return self
@@ -117,65 +122,3 @@ class ArrayForcer(BaseEstimator, TransformerMixin):
         else:
             result = X.astype(self.dtypes_)
         return result
-
-
-class POSExtractor(BaseEstimator, _VectorizerMixin, TransformerMixin):
-    def __init__(
-        self,
-        *,
-        input="content",
-        encoding="utf-8",
-        decode_error="strict",
-        strip_accents=None,
-        lowercase=True,
-        preprocessor=None,
-        tokenizer=None,
-        tagset=None,
-        language="eng",
-        stop_words=None,
-        token_pattern=r"(?u)\b\w\w+\b",
-        ngram_range=(1, 1),
-    ):
-        # associated with pre/post-processing
-        self.input = input
-        self.encoding = encoding
-        self.decode_error = decode_error
-        self.strip_accents = strip_accents
-        self.preprocessor = preprocessor
-        self.tokenizer = tokenizer
-        self.tagset = tagset
-        self.language = language
-        self.analyzer = "word"
-        self.lowercase = lowercase
-        self.token_pattern = token_pattern
-        if tokenizer is not None and token_pattern == r"(?u)\b\w\w+\b":
-            self.token_pattern = None
-        self.stop_words = stop_words
-        self.ngram_range = ngram_range
-
-    def fit(self, X, y=None):
-        # Triggers a parameter validation
-        _validate_raw_docs(X)
-        self._warn_for_unused_params()
-        self._validate_params()
-        return self
-
-    def build_tagger(self):
-        analyzer = self.build_analyzer()
-        return partial(tokenize_tag, tagset=self.tagset, lang=self.language, tokenizer=analyzer)
-
-    def transform(self, X):
-        _validate_raw_docs(X)
-        self._validate_params()
-        tagger = self.build_tagger()
-        tag_tok_lists = map(tagger, X)
-        tag_strings = map(partial(extract_tags, as_string=True), tag_tok_lists)
-        if isinstance(X, Collection):
-            tag_strings = list(tag_strings)
-        return tag_strings
-
-    def fit_transform(self, X, y=None):
-        return self.fit(X, y).transform(X)
-
-    def _more_tags(self):
-        return {"X_types": ["string"]}
