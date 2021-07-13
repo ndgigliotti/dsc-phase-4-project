@@ -4,7 +4,7 @@ from collections import defaultdict
 from functools import lru_cache, partial, singledispatch
 from types import MappingProxyType
 from typing import Any, Collection, Union
-
+from deprecation import deprecated
 import gensim.parsing.preprocessing as gensim_pp
 import nltk
 import numpy as np
@@ -15,28 +15,19 @@ from nltk.tokenize import casual as nltk_casual
 from nltk.tokenize.treebank import TreebankWordDetokenizer, TreebankWordTokenizer
 from numpy import ndarray
 from pandas.core.series import Series
+from sacremoses.tokenize import MosesTokenizer
 from sklearn.feature_extraction import text as skl_text
 
 from ..._validation import _check_1d, _validate_docs
-from ...typing import CallableOnStr, Documents, TaggedTokenList, Tokenizer, TokenList
+from ...typing import CallableOnStr, Documents, TaggedTokenSeq, Tokenizer, TokenSeq
 from ..settings import CACHE_SIZE, DEFAULT_SEP, DEFAULT_TOKENIZER
+from .tokens import moses_detokenize, wordnet_lemmatize
 
-WORDNET_POS = MappingProxyType(
-    {
-        "ADJ": wordnet.ADJ,
-        "NOUN": wordnet.NOUN,
-        "PRON": wordnet.NOUN,
-        "ADV": wordnet.ADV,
-        "VERB": wordnet.VERB,
-    }
-)
-"""Mapping of Universal POS tags to Wordnet POS tags."""
+SENT_DELIM = frozenset(".!?")
 
-tb_tokenize = TreebankWordTokenizer().tokenize
+
+tb_tokenizer = TreebankWordTokenizer()
 """Treebank tokenizer. Useful for tokenize -> process -> detokenize."""
-
-tb_detokenize = TreebankWordDetokenizer().tokenize
-"""Treebank detokenizer. Useful for tokenize -> process -> detokenize."""
 
 
 @singledispatch
@@ -134,6 +125,7 @@ def lowercase(docs: Documents) -> Documents:
     return _process(docs, lower)
 
 
+@deprecated(details="Use `tokens.filter_length` instead.")
 def strip_short(docs: Documents, minsize: int = 3) -> Documents:
     """Remove words with less than `minsize` characters.
 
@@ -245,7 +237,7 @@ def limit_repeats(docs: Documents) -> Documents:
     return _process(docs, nltk_casual.reduce_lengthening)
 
 
-def strip_tags(docs: Documents) -> Documents:
+def strip_html(docs: Documents) -> Documents:
     """Remove HTML tags.
 
     Polymorphic wrapper for gensim.parsing.preprocessing.strip_tags.
@@ -263,6 +255,7 @@ def strip_tags(docs: Documents) -> Documents:
     return _process(docs, gensim_pp.strip_tags)
 
 
+@deprecated(details="Use `tokens.porter_stem` instead.")
 @singledispatch
 def stem_text(docs: Documents, lowercase: bool = False) -> Documents:
     """Apply Porter stemming to text.
@@ -291,12 +284,12 @@ def stem_text(docs: Documents, lowercase: bool = False) -> Documents:
 def _(docs: str, lowercase: bool = False):
     """Dispatch for str. Keeps cache to reuse previous results."""
     stem = nltk.PorterStemmer()
-    tokens = tb_tokenize(docs)
+    tokens = moses_tokenize(docs)
     tokens = [stem.stem(x, lowercase) for x in tokens]
-    return tb_detokenize(tokens)
+    return moses_detokenize(tokens)
 
 
-def strip_handles(docs: Documents) -> Documents:
+def strip_twitter_handles(docs: Documents) -> Documents:
     """Remove Twitter @mentions or other similar handles.
 
     Polymorphic wrapper for nltk.tokenize.casual.remove_handles.
@@ -380,6 +373,10 @@ def strip_punct(
         Processed document(s).
     """
     _validate_docs(docs)
+    charset = set(punct).union(exclude)
+    if not charset.issubset(string.punctuation):
+        invalid = "".join(charset.difference(string.punctuation))
+        raise ValueError(f"Invalid punctuation symbols: '{invalid}'")
     if exclude:
         exclude = re.escape(exclude)
         punct = re.sub(fr"[{exclude}]", "", punct)
@@ -391,6 +388,7 @@ def strip_punct(
     return _process(docs, sub)
 
 
+@deprecated(details="Use `tokens.filter_stopwords` instead.")
 @singledispatch
 def strip_stopwords(
     docs: Documents, stopwords: Collection[str] = gensim_pp.STOPWORDS
@@ -417,11 +415,11 @@ def strip_stopwords(
 def _(docs: str, stopwords: Collection[str] = gensim_pp.STOPWORDS):
     """Dispatch for str."""
     stopwords = set(stopwords)
-    tokens = [x for x in tb_tokenize(docs) if x not in stopwords]
-    return tb_detokenize(tokens)
+    tokens = [x for x in moses_tokenize(docs) if x not in stopwords]
+    return moses_detokenize(tokens)
 
 
-def space_tokenize(docs: Documents) -> TokenList:
+def space_tokenize(docs: Documents) -> Union[TokenSeq, Collection[TokenSeq]]:
     """Convenience function to tokenize by whitespace.
 
     Uses regex to split on any whitespace character.
@@ -443,6 +441,14 @@ def space_tokenize(docs: Documents) -> TokenList:
     return _process(docs, re_white.split)
 
 
+def moses_tokenize(docs: Documents, lang="en") -> Union[TokenSeq, Collection[TokenSeq]]:
+    # Make sure docs are good
+    _validate_docs(docs)
+
+    tokenizer = MosesTokenizer(lang=lang)
+    return _process(docs, tokenizer.tokenize)
+
+
 @singledispatch
 def tokenize_tag(
     docs: Documents,
@@ -454,10 +460,10 @@ def tokenize_tag(
     as_tokens: bool = True,
 ) -> Union[
     Documents,
-    TaggedTokenList,
-    TokenList,
-    Collection[TaggedTokenList],
-    Collection[TokenList],
+    TaggedTokenSeq,
+    TokenSeq,
+    Collection[TaggedTokenSeq],
+    Collection[TokenSeq],
 ]:
     """Tokenize and POS-tag documents.
 
@@ -515,7 +521,7 @@ def _(
     fuse_tuples: bool = False,
     sep: str = DEFAULT_SEP,
     as_tokens: bool = True,
-) -> Union[str, TokenList, TaggedTokenList]:
+) -> Union[str, TokenSeq, TaggedTokenSeq]:
     """Dispatch for str. Keeps cache to reuse previous results."""
     # Tuples must be fused if returning a str
     if not as_tokens:
@@ -531,6 +537,7 @@ def _(
     return docs if as_tokens else " ".join(docs)
 
 
+@deprecated(details="Use `tokens.pos_tag` instead.")
 @singledispatch
 def mark_pos(docs: Documents, tagset: str = None, sep: str = DEFAULT_SEP) -> Documents:
     """Mark POS in documents with suffix.
@@ -567,17 +574,18 @@ def _(docs: str, tagset: str = None, sep: str = DEFAULT_SEP) -> Documents:
     # Get tokens with POS suffixes
     tokens = tokenize_tag(
         docs,
-        tokenizer=tb_tokenize,
+        tokenizer=moses_tokenize,
         tagset=tagset,
         fuse_tuples=True,
         sep=sep,
     )
     # Detokenize and return
-    return tb_detokenize(tokens)
+    return moses_detokenize(tokens)
 
 
+@deprecated(details="Use `tokens.mark_negation` instead.")
 @singledispatch
-def mark_negation(
+def mark_negation_text(
     docs: Documents, double_neg_flip: bool = False, sep: str = DEFAULT_SEP
 ) -> Documents:
     """Mark words '_NEG' which fall between a negating word and punctuation mark.
@@ -604,15 +612,15 @@ def mark_negation(
     _validate_docs(docs)
 
     # Process using str dispatch
-    return _process(docs, mark_negation, double_neg_flip=double_neg_flip, sep=sep)
+    return _process(docs, mark_negation_text, double_neg_flip=double_neg_flip, sep=sep)
 
 
-@mark_negation.register
+@mark_negation_text.register
 @lru_cache(maxsize=CACHE_SIZE, typed=False)
 def _(docs: str, double_neg_flip: bool = False, sep: str = DEFAULT_SEP) -> str:
     """Dispatch for str. Keeps cache to reuse previous results."""
     # Tokenize with Treebank
-    docs = tb_tokenize(docs)
+    docs = moses_tokenize(docs)
 
     # Apply nltk.sentiment.util.mark_negation
     docs = nltk_mark_neg(docs, double_neg_flip=double_neg_flip)
@@ -623,9 +631,10 @@ def _(docs: str, double_neg_flip: bool = False, sep: str = DEFAULT_SEP) -> str:
         docs[i] = re_neg.sub(f"{sep}NEG", word)
 
     # Detokenize and return
-    return tb_detokenize(docs)
+    return moses_detokenize(docs)
 
 
+@deprecated(details="Use `tokens.wordnet_lemmatize` instead.")
 @singledispatch
 def lemmatize_text(docs: Documents) -> Documents:
     """Lemmatize document(s) using POS-tagging and WordNet lemmatization.
@@ -660,14 +669,8 @@ def lemmatize_text(docs: Documents) -> Documents:
 def _(docs: str) -> str:
     """Dispatch for str. Keeps cache to reuse previous results."""
     # Tokenize and tag POS
-    tag_toks = tokenize_tag(docs, tokenizer=tb_tokenize, tagset="universal")
-
-    # Convert universal tags to Wordnet tags
-    univ2wordnet = defaultdict(lambda: wordnet.NOUN, **WORDNET_POS)
-    tag_toks = [(w, univ2wordnet[t]) for w, t in tag_toks]
-    # Lemmatize
-    wnl = WordNetLemmatizer()
-    toks = [wnl.lemmatize(w, t) for w, t in tag_toks]
+    tokens = tuple(moses_tokenize(docs))
+    tokens = wordnet_lemmatize(tokens)
 
     # Detokenize and return
-    return tb_detokenize(toks)
+    return moses_detokenize(tokens)

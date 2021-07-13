@@ -11,13 +11,13 @@ from pandas.core.series import Series
 from scipy.sparse import csr_matrix
 
 from .._validation import _validate_docs
-from ..typing import Documents, SeedLike, TaggedTokenList
+from ..typing import Documents, SeedLike, TaggedTokenSeq
 from ..utils import swap_index
 from .processors.text import _process
 
 
 def extract_tags(
-    tag_toks: TaggedTokenList, as_string: bool = False
+    tag_toks: TaggedTokenSeq, as_string: bool = False
 ) -> Union[List[str], str]:
     _, tags = zip(*tag_toks)
     return " ".join(tags) if as_string else list(tags)
@@ -50,7 +50,6 @@ def frame_doc_vecs(
     if doc_index is None:
         doc_index = pd.RangeIndex(0, doc_vecs.shape[0])
     return DataFrame(doc_vecs.todense(), columns=vocab.to_numpy(), index=doc_index)
-
 
 def readable_sample(
     data: Series, n: int = 10, random_state: SeedLike = None
