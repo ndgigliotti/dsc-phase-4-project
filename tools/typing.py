@@ -1,5 +1,5 @@
 from re import Pattern
-from typing import Any, Callable, Iterable, List, Tuple, TypeVar, Union
+from typing import Any, Callable, Collection, Iterable, List, Sequence, Tuple, TypeVar, Union
 
 from numpy import ndarray
 from numpy.random import BitGenerator, RandomState
@@ -26,13 +26,21 @@ EstimatorLike = Union[BaseEstimator, Pipeline]
 Documents = Union[str, Iterable[str]]
 
 # List of word tokens
-TokenList = List[str]
+TokenSeq = Sequence[str]
+TokenTuple = Tuple[str]
+
+# One or more token sequences
+TokenDocs = Union[TokenSeq, Collection[TokenSeq]]
 
 # List of tokens with POS tags
-TaggedTokenList = List[Tuple[str, str]]
+TaggedTokenSeq = Sequence[Tuple[str, str]]
+TaggedTokenTuple = Tuple[Tuple[str, str]]
+
+# One or more tagged token sequences
+TaggedTokenDocs = Union[TaggedTokenSeq, Collection[TaggedTokenSeq]]
 
 # Function which takes a string
 CallableOnStr = Callable[[str], Any]
 
 # Function which tokenizes a string
-Tokenizer = Callable[[str], TokenList]
+Tokenizer = Callable[[str], TokenSeq]

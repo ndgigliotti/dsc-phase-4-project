@@ -1,11 +1,11 @@
-from typing import Collection, Iterable, Union
+from typing import Collection, Iterable, Union, Sequence
 
 from numpy import ndarray
 from pandas.core.generic import NDFrame
 from sklearn.base import TransformerMixin
 from sklearn.pipeline import Pipeline
 
-from .typing import ArrayLike, Documents
+from .typing import ArrayLike, Documents, TokenSeq, TokenTuple
 
 
 def _validate_orient(orient: str):
@@ -98,4 +98,16 @@ def _validate_docs(docs: Documents):
             if not isinstance(doc, str):
                 raise TypeError(f"Expected iterable of str; encountered {type(doc)} when iterating.")
         
+def _validate_tokens(tokens: TokenSeq, check_str=False):
+    if not isinstance(tokens, Sequence):
+        raise TypeError(f"Expected sequence of str, got {type(tokens)}.")
+    if check_str:
+        for token in tokens:
+            if not isinstance(token, str):
+                raise TypeError(f"Expected sequence of str; encountered {type(token)} when iterating.")
 
+def _invalid_value(param_name, value, valid_options=None):
+    if valid_options is not None:
+        raise ValueError(f"Invalid value {value} for `{param_name}`. Valid options: {valid_options}")
+    else:
+        raise ValueError(f"Invalid value for `{param_name}`: {value}")
