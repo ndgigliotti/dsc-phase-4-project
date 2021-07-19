@@ -1,7 +1,7 @@
 from . import (
     cleaning,
     language,
-    modeling,
+    sklearn,
     outliers,
     plotting,
     typing,
