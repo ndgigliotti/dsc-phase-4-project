@@ -1,5 +1,6 @@
 import re
 import string
+import html
 from collections import defaultdict
 from functools import lru_cache, partial, singledispatch
 from types import MappingProxyType
@@ -237,7 +238,7 @@ def limit_repeats(docs: Documents) -> Documents:
     return _process(docs, nltk_casual.reduce_lengthening)
 
 
-def strip_html(docs: Documents) -> Documents:
+def strip_html_tags(docs: Documents) -> Documents:
     """Remove HTML tags.
 
     Polymorphic wrapper for gensim.parsing.preprocessing.strip_tags.
@@ -253,6 +254,10 @@ def strip_html(docs: Documents) -> Documents:
         Processed document(s).
     """
     return _process(docs, gensim_pp.strip_tags)
+
+
+def decode_html_entities(docs: Documents) -> Documents:
+    return _process(docs, html.unescape)
 
 
 @deprecated(details="Use `tokens.porter_stem` instead.")

@@ -1,6 +1,6 @@
-from functools import singledispatch
+from functools import partial, singledispatch
 from types import MappingProxyType
-from typing import Collection
+from typing import Collection, Union
 
 import nltk
 import pandas as pd
@@ -9,7 +9,7 @@ from pandas.core.series import Series
 
 from .._validation import _validate_docs
 from ..typing import CallableOnStr, Documents, Tokenizer
-from .processors.text import strip_stopwords
+from .processors.tokens import fetch_stopwords, filter_stopwords
 from .settings import DEFAULT_TOKENIZER
 
 NGRAM_FINDERS = MappingProxyType(
@@ -38,7 +38,7 @@ def scored_ngrams(
     measure: str = "pmi",
     tokenizer: Tokenizer = DEFAULT_TOKENIZER,
     preprocessor: CallableOnStr = None,
-    stopwords: Collection[str] = None,
+    stopwords: Union[str, Collection[str]] = None,
     min_freq: int = 0,
     fuse_tuples: bool = True,
     sep: str = " ",
@@ -62,8 +62,9 @@ def scored_ngrams(
         Callable for tokenizing docs.
     preprocessor : callable, optional
         Callable for preprocessing docs before tokenization, by default None.
-    stopwords : collection of str, optional
-        Stopwords to remove from docs, by default None.
+    stopwords : str or collection of str, optional
+        Name of known stopwords set or collection of stopwords to remove from docs.
+        By default None.
     min_freq : int, optional
         Drop ngrams below this frequency, by default 0.
     fuse_tuples : bool, optional
@@ -79,10 +80,10 @@ def scored_ngrams(
     """
     _validate_docs(docs)
     # Coerce docs to list
-    if isinstance(docs, (ndarray, Series)):
-        docs = docs.squeeze().tolist()
-    else:
-        docs = list(docs)
+    # if isinstance(docs, (ndarray, Series)):
+    #     docs = docs.squeeze().tolist()
+    # else:
+    #     docs = list(docs)
 
     # Get collocation finder and measures
     if not isinstance(n, int):
@@ -97,12 +98,17 @@ def scored_ngrams(
     if preprocessor is not None:
         # Apply preprocessing
         docs = map(preprocessor, docs)
+    # Tokenize
+    docs = map(tokenizer, docs)
     if stopwords is not None:
-        # Drop stopwords
-        docs = strip_stopwords(docs, stopwords)
+        # Fetch stopwords if passed str
+        if isinstance(stopwords, str):
+            stopwords = fetch_stopwords(stopwords)
+        # Remove stopwords
+        docs = map(partial(filter_stopwords, stopwords=stopwords), docs)
 
     # Find and score collocations
-    ngrams = finder.from_documents(map(tokenizer, docs))
+    ngrams = finder.from_documents(docs)
     ngrams.apply_freq_filter(min_freq)
     ngram_score = ngrams.score_ngrams(getattr(measures, measure))
 
