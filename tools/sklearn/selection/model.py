@@ -31,11 +31,15 @@ from sklearn.model_selection import (
 )
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import FunctionTransformer
+from deprecation import deprecated
 
 from ... import utils
 
 
 ParamSpaceSpec = Union[Dict[str, List], List[Dict[str, List]]]
+SearchEstimator = Union[
+    GridSearchCV, HalvingGridSearchCV, RandomizedSearchCV, HalvingRandomSearchCV
+]
 
 
 def _to_joblib(obj: object, dst: str, test: bool = False) -> str:
@@ -143,6 +147,7 @@ def sweep(
     resource: str = "n_samples",
     max_resources: Union[int, str] = "auto",
     min_resources: Union[int, str] = "exhaust",
+    n_candidates: Union[int, str] = "exhaust",
     aggressive_elimination: bool = False,
     **kwargs,
 ) -> str:
@@ -212,6 +217,12 @@ def sweep(
         The minimum amount of resource that any candidate is allowed to use
         for a given iteration. Can be integer, 'smallest' or 'exhaust' (default).
         Only relevant for halving searches.
+    n_candidates : Union[int, str], optional
+        The number of candidate parameters to sample, at the first
+        iteration. Using 'exhaust' will sample enough candidates so that the
+        last iteration uses as many resources as possible, based on
+        `min_resources`, `max_resources` and `factor`. In this case,
+        `min_resources` cannot be 'exhaust'. Only relevant for 'hrand'.
     aggressive_elimination : bool, optional
         Replay the first iteration to weed out candidates until enough are eliminated
         such that only `factor` candidates are evaluated in the final iteration.
@@ -266,7 +277,6 @@ def load_results(
     short_names: bool = True,
     drop_dicts: bool = True,
     stats: Sequence[str] = ("mean_fit_time", "mean_test_score", "rank_test_score"),
-    rank_index: bool = False,
 ) -> DataFrame:
     """Load stripped-down version of search results from pickle.
 
@@ -287,9 +297,6 @@ def load_results(
     stats : Sequence[str], optional
         Stats to include in the report, by default 'mean_test_score'
         and 'rank_test_score'. Pass `None` to for all the available stats.
-    rank_index : bool, optional
-        Set the index to 'rank_test_score' and sort by index. There may be duplicate
-        indices. By default False.
 
     Returns
     -------
@@ -323,16 +330,13 @@ def load_results(
         splits = df.filter(regex=r"split[0-9]+_").columns
         df.drop(columns=splits, inplace=True)
 
-    # Set index to 'rank_test_score' (if applicable) and sort
-    if rank_index:
-        if "rank_test_score" not in df.columns:
-            raise RuntimeWarning("Could not set index to 'rank_test_score'")
-        else:
-            df.set_index("rank_test_score", drop=True, inplace=True)
-            df.sort_index(inplace=True)
-    # Sort by 'rank_test_score' no matter what (unless dropped)
+    # Sort by rank score and fit time
+    if "rank_test_score" in df.columns and "mean_fit_time" in df.columns:
+        df.sort_values(["rank_test_score", "mean_fit_time"], inplace=True)
     elif "rank_test_score" in df.columns:
-        df.sort_values("rank_test_score", inplace=True)
+        df.sort_values("rank_test_score")
+    # Reset index after sorting
+    df.index = pd.RangeIndex(0, df.shape[0], name=df.index.name)
 
     # Cut out pipeline prefixes and the word 'test'
     if short_names:
@@ -355,7 +359,7 @@ def _func_xformers_to_str(x):
         x = f"{name}({kwargs})"
     return x
 
-
+@deprecated(details="Use `load` instead.")
 def load_best_params(path: str) -> dict:
     """Return best parameters from serialized search estimator.
 
@@ -376,7 +380,26 @@ def load_best_params(path: str) -> dict:
     return search.best_params_
 
 
-def param_space_size(param_space: ParamSpaceSpec, n_folds=5) -> Series:
+def load(path: str) -> SearchEstimator:
+    """Load serialized search estimator.
+
+    Parameters
+    ----------
+    path : str
+        Path to serialized search estimator.
+        Adds '.joblib' extension if not given.
+
+    Returns
+    -------
+    dict
+        Dict of best parameters.
+    """
+    if ".joblib" not in path:
+        path = f"{path}.joblib"
+    return joblib.load(os.path.normpath(path))
+
+
+def space_size(param_space: ParamSpaceSpec, n_folds=5) -> Series:
     """Return number of parameters, number of combos, number of fits.
 
     Parameters
@@ -394,9 +417,9 @@ def param_space_size(param_space: ParamSpaceSpec, n_folds=5) -> Series:
     """
     if isinstance(param_space, Sequence):
         n_combos = 0
-        params = {}
+        params = set()
         for sub_space in param_space:
-            params.add(sub_space.keys())
+            params = params.union(sub_space.keys())
             combos = utils.cartesian(*sub_space.values())
             n_combos += combos.shape[0]
         n_params = len(params)
@@ -416,3 +439,7 @@ def param_space_size(param_space: ParamSpaceSpec, n_folds=5) -> Series:
             "n_fits": n_combos * n_folds,
         }
     )
+
+
+def get_starter_grid(cls):
+    return {k: [v] for k, v in utils.get_defaults(cls).items()}
