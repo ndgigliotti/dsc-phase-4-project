@@ -11,7 +11,7 @@ Apple has asked me to create a strong predictive model for detecting positive, n
 
 1. Create an accurate classifier which can classify **novel tweets** as positive, negative, or neutral.
 2. Find out what people are saying about Apple (at South by Southwest, 2011).
-3. Make some recommendations based on my findings.
+3. Make some PR recommendations for the period immediately following the event.
 
 # Overview of Dataset
 
@@ -27,9 +27,9 @@ Where there are tweets labeled with an emotion ('Positive' or 'Negative'), but n
 
 # Methods and Model
 
-I develop a reasonably accurate logistic regression model after a tremendous amount of grid-searching and detail-oriented work. The final model, whose confusion matrix is produced below, is not as accurate as I would like. Its accuracy is ~0.68, with a balanced accuracy of ~0.67.
+I develop a reasonably accurate logistic regression model after a tremendous amount of grid-searching and detail-oriented work. The final model, whose confusion matrix is produced below, is not as accurate as I would like. Its balanced accuracy score is ~0.66.
 
-<div align="center"><img src="images/output_140_0.png"></div>
+<div align="center"><img src="images\final_confusion_matrix.png"></div>
  
 The dataset is small and noisy, and I shouldn't expect to obtain a highly accurate model. Nevertheless, I have a good sense of how to improve it. See Future Work for more details.
 
@@ -37,18 +37,14 @@ The dataset is small and noisy, and I shouldn't expect to obtain a highly accura
 
 I use Scikit-Learn's `TfidfVectorizer` to extract TF\*IDF keywords for each tweet in the corpus. The TF\*IDF features are the most important overall for prediction, but they are not the most useful for brand-related insights. See my EDA notebook ([exploratory.ipynb](exploratory.ipynb)) for a deeper brand-related examination of TF\*IDF keywords.
 
-<div align="center"><img src="images/output_154_0.png"></div>
+<div align="center"><img src="images\txt_coef_wordclouds.svg"></div>
 
-### Brand Terms
-I extract brand terms based on the human-labeled brands using regular expressions. I encode their presence and absence in each tweet using `CountVectorizer(binary=True)`. They can be thought of like one-hot-encoded categorical variables. 
-
-<div align="center"><img src="images/output_163_1.png"></div>
 
 ### VADER Polarity Scores
 
 I augment my training data with VADER polarity scores (4-feature vectors). These scores are extracted dynamically during the modeling process using my `VaderVectorizer`. The features are 'Neg', 'Neu', 'Pos', and 'Compound'. Compound is expected to be the most important, as it's a composite of the other 3 scores plus some additional adjustments. For my model, Neg also proved very important.
 
-<div align="center"><img src="images/output_169_1.png"></div>
+<div align="center"><img src="images\vader_coefs.png"></div>
 
 # Repository Structure
 
@@ -62,7 +58,7 @@ The slideshow presentation is located [here](/presentation) in the 'presentation
 
 ### My `tools` Package
 
-I put a lot of time and energy into developing my own tools for analysis. I developed a lot in the `tools.language` module for this project in particular. The package is fairly extensive, and I don't aim to give a full description of it here. I will, however, mention a few highlights.
+I put a lot of time and energy into developing my own tools for analysis. It's probably my favorite part of this kind of work, and I (admittedly) tend to get carried away with it. I developed a lot in `tools.language`, `tools.sklearn.vectorizers`, and `tools.sklearn.selection` for this project in particular.
 
 #### Caching
 
@@ -70,11 +66,16 @@ Some computationally expensive functions in `tools.language` implement caching, 
 
 #### Polymorphism
 
-I've designed the text processing functions in `tools.language` to be polymorphic: capable of handling both a single string document and various types of iterables of documents. This level of flexibility is arguably overkill for the present task, but it allows the functions to be easily deployed within Scikit-Learn's `FunctionTransformer` (where they take array input) or as the `TfidfVectorizer.preprocessor` (where they take string input). They can also directly handle Pandas `Series` objects.
+I've designed the raw-text processing functions in `tools.language` to be polymorphic: capable of handling both a single string document and various types of iterables of documents. This level of flexibility is arguably overkill for the present task.
+
+#### FreqVectorizer
+
+I extended Scikit-Learn's `TfidfVectorizer` to be capable of much more advanced preprocessing out of the box. In addition to the many new text filters, there's built-in stemming and lemmatization, better stopwords selection, and the option to mark negation or parts of speech.
+
 
 #### VaderVectorizer
 
-Another notable development is the `VaderVectorizer`, which extracts VADER (Valence Aware Dictionary and Sentiment Reasoner) polarity scores from documents and turns them into short vectors of shape (n_samples, 4). This is essentially just a fancy wrapper around the VADER tools from NLTK, which integrates them with the Scikit-Learn API. Nevertheless, it proved very useful for the current project.
+Another notable development is the `VaderVectorizer`, which extracts VADER (Valence Aware Dictionary and Sentiment Reasoner) polarity scores from documents and turns them into short vectors of shape (n_samples, 4). This is essentially just a fancy wrapper around the VADER tools from NLTK, which integrates them with the Scikit-Learn API and implements caching. It proved very useful for the current project.
 
 ### Sweeps
 
