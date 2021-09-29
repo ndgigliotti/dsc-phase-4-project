@@ -1,35 +1,57 @@
 import itertools
+import os
 import re
 from functools import partial, singledispatch
-from operator import itemgetter
-from typing import Callable, Iterable
+from multiprocessing.pool import Pool
+from operator import itemgetter, xor
+from typing import Callable, Iterable, List, Union
 
+import langdetect
 import pandas as pd
 from fuzzywuzzy.fuzz import WRatio as weighted_ratio
 from fuzzywuzzy.process import extractOne as extract_one
 from numpy import ndarray
 from pandas.core.frame import DataFrame
 from pandas.core.series import Series
+from tools import outliers, plotting
+from tools._validation import _invalid_value
+from tools.language.utils import process_strings
+import joblib
+from tools.typing import Documents, PatternLike
 
-from ..typing import PatternLike
+
+def _findall(id_, pat, docs, flags):
+    findings = (
+        docs.str.findall(pat, flags=flags)
+        .explode()
+        .dropna()
+        .to_frame("locate_patterns")
+        .assign(pattern=id_)
+    )
+    return findings
 
 
 def locate_patterns(
-    *pats: PatternLike,
-    strings: Series,
+    patterns: List[PatternLike],
+    docs: Series,
     exclusive: bool = False,
     flags: re.RegexFlag = 0,
+    n_jobs: int = None,
 ) -> Series:
     """Find all occurrences of one or more regex in a string Series.
 
     Parameters
     ----------
-    strings : Series
-        Strings to find and index patterns in.
+    patterns: List of regex
+        Patterns to search for using `re.findall`.
+    docs : Series
+        Series of str to find and index patterns in.
     exclusive : bool, optional
         Drop indices that match more than one pattern. False by default.
     flags : RegexFlag, optional
         Flags for regular expressions, by default 0.
+    n_jobs : int, optional
+        Number of processes to open. Defaults to sequential processing if None.
 
     Returns
     -------
@@ -37,16 +59,9 @@ def locate_patterns(
         Series of matches (str).
     """
     # Gather findings for each pattern
-    findings = []
-    for id_, pat in enumerate(pats):
-        pat_findings = (
-            strings.str.findall(pat, flags=flags)
-            .explode()
-            .dropna()
-            .to_frame("locate_patterns")
-            .assign(pattern=id_)
-        )
-        findings.append(pat_findings)
+    findall = joblib.delayed(partial(_findall, docs=docs, flags=flags))
+    workers = joblib.Parallel(n_jobs=n_jobs, prefer="processes")
+    findings = workers(findall(i, x) for i, x in enumerate(patterns))
 
     # Merge all findings
     findings = pd.concat(findings, axis=0)
@@ -116,3 +131,112 @@ def _(
     strings["match"] = scores.map(itemgetter(0), "ignore")
     strings["score"] = scores.map(itemgetter(1), "ignore")
     return strings
+
+
+def length_outliers(
+    docs: Union[Series, DataFrame],
+    method: str = "quantile",
+    q_inner: float = None,
+    q_lower: float = None,
+    q_upper: float = None,
+    q_interp: str = "linear",
+    iqr_mult: float = 1.5,
+    z_thresh: float = 3.0,
+    subset=None,
+) -> Series:
+    if isinstance(docs, Series):
+        data = docs.str.len()
+    else:
+        data = docs.applymap(len, "ignore")
+    if method == "quantile":
+        mask = outliers.quantile_outliers(
+            data,
+            subset=subset,
+            inner=q_inner,
+            lower=q_lower,
+            upper=q_upper,
+            interp=q_interp,
+        )
+    elif method == "iqr":
+        mask = outliers.tukey_outliers(data, subset=subset, mult=iqr_mult)
+    elif method == "z-score":
+        mask = outliers.z_outliers(data, subset=subset, thresh=z_thresh)
+    else:
+        _invalid_value("method", method, ("quantile", "iqr", "z-score"))
+    length_info(
+        outliers.trim(data, mask, False),
+        compute_len=False,
+    )
+    return mask
+
+
+def length_info(docs: Union[Series, DataFrame], compute_len=True):
+    if not isinstance(docs, (Series, DataFrame)):
+        raise TypeError(f"Expected Series or DataFrame, got {type(docs).__name__}.")
+    if isinstance(docs, Series):
+        docs = docs.to_frame()
+    if compute_len:
+        data = docs.select_dtypes("object").applymap(len, "ignore")
+    else:
+        data = docs
+    report = data.describe().add_prefix("len_")
+    print(report.to_string(float_format="{:,.0f}".format))
+
+
+def trim_length_outliers(
+    docs: Union[Series, DataFrame],
+    method: str = "quantile",
+    q_inner: float = None,
+    q_lower: float = None,
+    q_upper: float = None,
+    q_interp: str = "linear",
+    iqr_mult: float = 1.5,
+    z_thresh: float = 3.0,
+    subset=None,
+    show_report=True,
+):
+    mask = length_outliers(
+        docs,
+        method=method,
+        q_inner=q_inner,
+        q_lower=q_lower,
+        q_upper=q_upper,
+        q_interp=q_interp,
+        iqr_mult=iqr_mult,
+        z_thresh=z_thresh,
+        subset=subset,
+    )
+    if show_report:
+        print("\n")
+    return outliers.trim(docs, mask, show_report)
+
+
+def length_dist(data: DataFrame, subset=None, tick_prec=0, log_scale=False, **kwargs):
+    if isinstance(data, Series):
+        data = data.to_frame(data.name or "Unnamed")
+    subset = subset or data.columns
+    if isinstance(subset, str):
+        subset = [subset]
+    n_chars = data.loc[:, subset]
+    n_chars = n_chars.applymap(len, "ignore")
+    if log_scale:
+        n_chars += 1
+    fig = plotting.multi_dist(data=n_chars, log_scale=log_scale, **kwargs)
+    axs = fig.get_axes()
+    for col, ax in zip(subset, axs):
+        ax.set(
+            xlabel="Character Count",
+            ylabel="Document Count",
+            title=f"Length of '{col}'",
+        )
+        ax.xaxis.set_major_formatter(plotting.big_number_formatter(tick_prec))
+        ax.yaxis.set_major_formatter(plotting.big_number_formatter(tick_prec))
+    fig.tight_layout()
+    return fig
+
+
+def detect_lang(docs: Documents, seed=None, n_jobs=None) -> Documents:
+    langdetect.DetectorFactory.seed = seed
+    docs = process_strings(docs, langdetect.detect, n_jobs=n_jobs, bar_desc="detect_lang")
+    langdetect.DetectorFactory.seed = None
+    return docs

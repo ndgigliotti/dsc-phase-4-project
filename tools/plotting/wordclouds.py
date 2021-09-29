@@ -4,11 +4,11 @@ from typing import Dict, List, Tuple, Union
 import matplotlib.pyplot as plt
 import numpy as np
 import wordcloud as wc
-from matplotlib.pyplot import Axes, Figure
+from matplotlib.axes import Axes
+from matplotlib.figure import Figure
 from pandas.core.frame import DataFrame
 from pandas.core.series import Series
-
-from .utils import smart_subplots
+from tools.plotting.utils import smart_subplots, get_desat_cmap
 
 
 @singledispatch
@@ -18,6 +18,7 @@ def wordcloud(
     cmap: Union[str, List[str], Dict[str, str]] = "Greys",
     size: Tuple[float, float] = (5, 3),
     ncols: int = 3,
+    desat=.7,
     ax: Axes = None,
     **kwargs,
 ) -> Union[Axes, Figure]:
@@ -54,6 +55,7 @@ def _(
     cmap: str = "Greys",
     size: Tuple[float, float] = (5, 3),
     ncols: int = 3,
+    desat=.7,
     ax: Axes = None,
     **kwargs,
 ) -> Axes:
@@ -64,6 +66,9 @@ def _(
 
     # Calculate size of wordcloud image
     width, height = np.array(size) * 100
+
+    # Get desaturated colormap
+    cmap = get_desat_cmap(cmap, desat=desat)
 
     cloud = wc.WordCloud(
         colormap=cmap,
@@ -93,6 +98,7 @@ def _(
     cmap: Union[str, List[str], Dict[str, str]] = "Greys",
     size: Tuple[float, float] = (5, 3),
     ncols: int = 3,
+    desat=.7,
     ax: Axes = None,
     **kwargs,
 ) -> Figure:
@@ -118,6 +124,7 @@ def _(
             cmap=cmap[column],
             size=size,
             ncols=ncols,
+            desat=desat,
             ax=ax,
             **kwargs,
         )

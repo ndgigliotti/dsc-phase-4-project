@@ -1,27 +1,20 @@
 import os
+import re
 import tempfile
 from operator import itemgetter
-from typing import (
-    Callable,
-    Dict,
-    List,
-    Mapping,
-    Sequence,
-    Tuple,
-    Union,
-)
+from typing import Callable, Dict, List, Mapping, Sequence, Tuple, Union
 
 import joblib
 import numpy as np
 import pandas as pd
-
 from IPython.core.display import HTML
 from IPython.display import display
 from numpy import ndarray
 from numpy.random import RandomState
 from pandas.core.frame import DataFrame
 from pandas.core.series import Series
-from sklearn.base import BaseEstimator
+from pandas.io import json
+from sklearn.base import BaseEstimator, is_classifier
 from sklearn.experimental import enable_halving_search_cv
 from sklearn.model_selection import (
     GridSearchCV,
@@ -31,18 +24,24 @@ from sklearn.model_selection import (
 )
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import FunctionTransformer
-from deprecation import deprecated
+from sklearn.utils import compute_sample_weight, deprecated
+from tools import utils
+from tools._validation import _check_overwrite
 
-from ... import utils
-
-
+SEARCH_ESTS = (
+    GridSearchCV,
+    HalvingGridSearchCV,
+    RandomizedSearchCV,
+    HalvingRandomSearchCV,
+)
 ParamSpaceSpec = Union[Dict[str, List], List[Dict[str, List]]]
 SearchEstimator = Union[
     GridSearchCV, HalvingGridSearchCV, RandomizedSearchCV, HalvingRandomSearchCV
 ]
+JOBLIB_EXT = re.compile(r"(\.joblib.*)$", flags=re.I)
 
 
-def _to_joblib(obj: object, dst: str, test: bool = False) -> str:
+def _to_joblib(obj: object, dst: str, compress=False, test: bool = False) -> str:
     """Serialize an object via Joblib.
 
     Parameters
@@ -50,11 +49,20 @@ def _to_joblib(obj: object, dst: str, test: bool = False) -> str:
     obj : object
         Object to serialize and save to disk.
     dst : str
-        Filepath of file to create. Directories will also be created
-        if necessary.
+        Path of the file in which it is to be stored. The compression method
+        corresponding to one of the supported filename extensions
+        ('.z', '.gz', '.bz2', '.xz' or '.lzma') will be used automatically.
     test : bool, optional
         Saves object to a temporary file to see if any errors are raised
         during serialization. The file is immediately removed. By default False.
+    compress: int from 0 to 9 or bool or 2-tuple, optional
+        Optional compression level for the data. 0 or False is no compression.
+        Higher value means more compression, but also slower read and write times.
+        Using a value of 3 is often a good compromise. See the notes for more details.
+        If compress is True, the compression level used is 3. If compress is a 2-tuple,
+        the first element must correspond to a string between supported compressors
+        (e.g 'zlib', 'gzip', 'bz2', 'lzma' 'xz'), the second element must be an integer
+        from 0 to 9, corresponding to the compression level. Defaults to False.
 
     Returns
     -------
@@ -66,7 +74,7 @@ def _to_joblib(obj: object, dst: str, test: bool = False) -> str:
         # Pickle object to tempfile
         with tempfile.TemporaryFile() as f:
             # Deleted when closed
-            joblib.dump(obj, f)
+            joblib.dump(obj, f, compress=compress)
             dst = "success"
     else:
         # Pickle object to `dst`
@@ -78,10 +86,7 @@ def _to_joblib(obj: object, dst: str, test: bool = False) -> str:
         if not os.path.basename(dst):
             raise ValueError(f"Invalid file path: {dst}")
 
-        # Add extension if missing
-        if ".joblib" not in os.path.basename(dst):
-            dst = f"{dst}.joblib"
-        joblib.dump(obj, dst)
+        joblib.dump(obj, dst, compress=compress)
     return dst
 
 
@@ -130,10 +135,13 @@ def sweep(
     *,
     X: Union[DataFrame, Series, ndarray],
     y: Union[Series, ndarray],
-    dst: str,
+    dst: str = None,
+    cv_dst: str = None,
+    compress: Union[int, bool, Tuple[str, int]] = False,
     scoring: Union[str, Callable, List, Tuple, Dict] = None,
     n_jobs: int = None,
     n_iter: int = 10,
+    n_samples: Union[int, float] = None,
     refit: bool = False,
     cv: int = None,
     kind: str = "grid",
@@ -169,7 +177,21 @@ def sweep(
     y : Union[Series, ndarray]
         Target variable.
     dst : str
-        Output filepath. If no extension, automatically adds '.joblib'.
+        Output filepath for pickled search estimator. The compression method
+        corresponding to one of the supported filename extensions ('.z', '.gz',
+        '.bz2', '.xz' or '.lzma') will be used automatically. Defaults to None.
+    cv_dst: str, optional
+        Output filepath for pickled `cv_results_`. Can be set to 'auto' if `dst`
+        is provided, in which case the filepath will be derived from `dst`. Defaults
+        to None.
+    compress: int from 0 to 9 or bool or 2-tuple, optional
+        Optional compression level for pickles. 0 or False is no compression.
+        Higher value means more compression, but also slower read and write times.
+        Using a value of 3 is often a good compromise. See the notes for more details.
+        If compress is True, the compression level used is 3. If compress is a 2-tuple,
+        the first element must correspond to a string between supported compressors
+        (e.g 'zlib', 'gzip', 'bz2', 'lzma' 'xz'), the second element must be an integer
+        from 0 to 9, corresponding to the compression level. Defaults to False.
     scoring : Union[str, Callable, List, Tuple, Dict], optional
         Metric name(s) or callable(s) to be passed to search estimator.
     n_jobs : int, optional
@@ -178,6 +200,11 @@ def sweep(
     n_iter : int, optional
         Number of iterations for randomized search, by default 10.
         Irrelevant for non-randomized searches.
+    n_samples : int or float, optional
+        If an int, the number of samples to use in search. If a float,
+        the fraction of total samples to use. If None, use full data.
+        Sampling is performed randomly without replacement before search.
+        Defaults to None.
     refit : bool, optional
         Whether to refit the estimator with the best parameters from the
         search. False by default.
@@ -203,7 +230,6 @@ def sweep(
         Whether to include training scores in `cv_results_`, by default False.
     random_state : int or RandomState, optional
         Seed for random number generator, or RandomState, by default None.
-        Only relevant for randomized searches.
     factor : int, optional
         Proportion of candidates that are selected for each subsequent iteration,
         by default 3. Only relevant for halving searches.
@@ -234,6 +260,18 @@ def sweep(
         Filename of pickled search estimator.
 
     """
+    if dst is not None:
+        if not JOBLIB_EXT.search(dst):
+            dst = f"{dst}.joblib"
+        dst = os.path.normpath(dst)
+        _check_overwrite(dst)
+    if cv_dst is not None:
+        if cv_dst == "auto" and dst is not None:
+            cv_dst = JOBLIB_EXT.sub("_cv.joblib", dst)
+        elif not JOBLIB_EXT.search(cv_dst):
+            cv_dst = f"{cv_dst}.joblib"
+        cv_dst = os.path.normpath(cv_dst)
+        _check_overwrite(cv_dst)
 
     # Select search class
     kinds = dict(
@@ -259,57 +297,53 @@ def sweep(
 
     search = cls(**relevant)
 
-    # Test pickling search estimator before fitting
-    _to_joblib(search, dst, test=True)
+    # Test pickling before fitting
+    if dst is not None:
+        _to_joblib(search, dst, compress=compress, test=True)
+    if cv_dst is not None:
+        _to_joblib(param_space, cv_dst, compress=compress, test=True)
+
+    # Sample the data
+    if n_samples is not None:
+        if is_classifier(estimator):
+            weights = compute_sample_weight("balanced", y)
+            weights /= weights.sum()
+        else:
+            weights = None
+        X, y = utils.aligned_sample(
+            X,
+            y,
+            size=n_samples,
+            weights=weights,
+            random_state=random_state,
+        )
 
     search.fit(X, y)
 
-    # Pickle search estimator
-    filename = _to_joblib(search, dst)
+    # Pickle search estimator and CV results
+    out = []
+    if dst is not None:
+        _to_joblib(search, dst, compress=compress)
+        out.append(dst)
+    if cv_dst is not None:
+        cv_dst = _to_joblib(search.cv_results_, cv_dst, compress=compress)
+        out.append(cv_dst)
+    if out:
+        display(out)
 
-    return filename
+    return search
 
 
-def load_results(
-    path: str,
+def prune_cv(
+    cv_results,
     *,
     drop_splits: bool = True,
     short_names: bool = True,
-    drop_dicts: bool = True,
+    drop_dicts: bool = False,
     stats: Sequence[str] = ("mean_fit_time", "mean_test_score", "rank_test_score"),
 ) -> DataFrame:
-    """Load stripped-down version of search results from pickle.
-
-    Retrieves the `cv_results_` from a serialized, fitted, search estimator
-    and optionally trims it down for quick readability.
-
-    Parameters
-    ----------
-    path : str
-        Filename of serialized search estimator.
-    drop_splits : bool, optional
-        Drop the columns of individual cross validation splits. By default True.
-    short_names : bool, optional
-        Strip pipeline prefixes and extra words like 'test' from column labels.
-        By default True.
-    drop_dicts : bool, optional
-        Drop parameter dictionaries to make the DataFrame prettier. By default True.
-    stats : Sequence[str], optional
-        Stats to include in the report, by default 'mean_test_score'
-        and 'rank_test_score'. Pass `None` to for all the available stats.
-
-    Returns
-    -------
-    DataFrame
-        Table of cross validation results.
-    """
-    # Load search estimator
-    if ".joblib" not in path:
-        path = f"{path}.joblib"
-    search = joblib.load(os.path.normpath(path))
-
     # Construct DataFrame
-    df = pd.DataFrame(search.cv_results_)
+    df = pd.DataFrame(cv_results)
 
     # Identify param columns and stat columns
     par_cols = df.columns[df.columns.str.startswith("param_")].to_list()
@@ -348,6 +382,49 @@ def load_results(
     return df
 
 
+def load_results(
+    path: str,
+    *,
+    drop_splits: bool = True,
+    short_names: bool = True,
+    drop_dicts: bool = False,
+    stats: Sequence[str] = ("mean_fit_time", "mean_test_score", "rank_test_score"),
+) -> DataFrame:
+    """Load stripped-down version of search results from pickle.
+
+    Retrieves the `cv_results_` from a serialized, fitted, search estimator
+    and optionally trims it down for quick readability.
+
+    Parameters
+    ----------
+    path : str
+        Filename of serialized search estimator.
+    drop_splits : bool, optional
+        Drop the columns of individual cross validation splits. By default True.
+    short_names : bool, optional
+        Strip pipeline prefixes and extra words like 'test' from column labels.
+        By default True.
+    drop_dicts : bool, optional
+        Drop parameter dictionaries to make the DataFrame prettier. By default True.
+    stats : Sequence[str], optional
+        Stats to include in the report, by default 'mean_test_score'
+        and 'rank_test_score'. Pass `None` to for all the available stats.
+
+    Returns
+    -------
+    DataFrame
+        Table of cross validation results.
+    """
+    cv_results = load(path).cv_results_
+    return prune_cv(
+        cv_results,
+        drop_splits=drop_splits,
+        short_names=short_names,
+        drop_dicts=drop_dicts,
+        stats=stats,
+    )
+
+
 def _func_xformers_to_str(x):
     """Convert FunctionTransformer to pretty string, otherwise do nothing."""
     if isinstance(x, FunctionTransformer):
@@ -359,7 +436,8 @@ def _func_xformers_to_str(x):
         x = f"{name}({kwargs})"
     return x
 
-@deprecated(details="Use `load` instead.")
+
+@deprecated("Use `joblib.load` instead.")
 def load_best_params(path: str) -> dict:
     """Return best parameters from serialized search estimator.
 
@@ -380,6 +458,7 @@ def load_best_params(path: str) -> dict:
     return search.best_params_
 
 
+@deprecated("Use `joblib.load` instead.")
 def load(path: str) -> SearchEstimator:
     """Load serialized search estimator.
 
@@ -394,8 +473,6 @@ def load(path: str) -> SearchEstimator:
     dict
         Dict of best parameters.
     """
-    if ".joblib" not in path:
-        path = f"{path}.joblib"
     return joblib.load(os.path.normpath(path))
 
 
@@ -420,14 +497,17 @@ def space_size(param_space: ParamSpaceSpec, n_folds=5) -> Series:
         params = set()
         for sub_space in param_space:
             params = params.union(sub_space.keys())
-            combos = utils.cartesian(*sub_space.values())
+            lists = [np.arange(len(x)) for x in sub_space.values()]
+            combos = utils.cartesian(*lists)
             n_combos += combos.shape[0]
         n_params = len(params)
     elif isinstance(param_space, pd.Series):
-        combos = utils.cartesian(*param_space.to_list())
+        lists = [np.arange(len(x)) for x in param_space.to_list()]
+        combos = utils.cartesian(*lists)
         n_combos, n_params = combos.shape
     elif isinstance(param_space, Mapping):
-        combos = utils.cartesian(*param_space.values())
+        lists = [np.arange(len(x)) for x in param_space.values()]
+        combos = utils.cartesian(*lists)
         n_combos, n_params = combos.shape
     else:
         raise TypeError(f"Expected dict or list of dicts, got {type(param_space)}.")

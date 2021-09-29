@@ -6,10 +6,10 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 from matplotlib import pyplot as plt
+from matplotlib.colors import LinearSegmentedColormap
 from matplotlib.figure import Figure
 from sklearn.preprocessing import minmax_scale
-
-from ..typing import SeedLike
+from tools.typing import SeedLike
 
 # Default style settings for heatmaps
 HEATMAP_STYLE = MappingProxyType(
@@ -42,6 +42,16 @@ def heatmap_figsize(shape: Tuple[int, int], scale: float = 0.85) -> Tuple[float,
     """
     figsize = np.array(shape, dtype=np.float64)[::-1] * scale
     return tuple(figsize)
+
+
+def get_desat_cmap(name, desat=0.7, n_colors=1000):
+    cls = type(plt.get_cmap(name))
+    pal = sns.color_palette(name, desat=desat, n_colors=n_colors)
+    if cls is LinearSegmentedColormap:
+        cmap = cls.from_list(name=name, colors=pal)
+    else:
+        cmap = cls(name=name, colors=pal)
+    return cmap
 
 
 def smart_subplots(

@@ -1,11 +1,11 @@
-from typing import Collection, Iterable, Union, Sequence
+import os
+from typing import Collection, Iterable
+import warnings
 
-from numpy import ndarray
-from pandas.core.generic import NDFrame
 from sklearn.base import TransformerMixin
 from sklearn.pipeline import Pipeline
 
-from .typing import ArrayLike, Documents, TokenSeq, TokenTuple
+from .typing import ArrayLike, Strings, TokenDocs, Tokens, TokenTuple
 
 
 def _validate_orient(orient: str):
@@ -35,23 +35,23 @@ def _validate_train_test_split(X_train, X_test, y_train, y_test):
 def _check_1dlike(data: ArrayLike):
     """Check that data is shape (n_samples,) or (n_samples, 1)."""
     if not (hasattr(data, "shape") and hasattr(data, "ndim")):
-        raise TypeError(
-            f"Expected array-like, got {type(data)}"
-        )
+        raise TypeError(f"Expected array-like, got {type(data)}")
     msg = "Data must be shape (n_samples,) or (n_samples, 1)."
     if data.ndim == 2 and data.shape[1] > 1:
         raise ValueError(msg)
     elif data.ndim > 2:
         raise ValueError(msg)
 
+
 def _check_1d(data: ArrayLike):
-    """Check that input is 1-dimensional."""
+    """Check that data is 1-dimensional."""
     if not (hasattr(data, "ndim")):
-        raise TypeError(
-            f"Expected array-like, got {type(data)}"
-        )
+        raise TypeError(f"Expected array-like, got {type(data)}")
     elif data.ndim > 1:
-        raise ValueError(f"Expected data to be 1-dimensional, but shape is {data.shape}.")
+        raise ValueError(
+            f"Expected data to be 1-dimensional, but shape is {data.shape}."
+        )
+
 
 def _validate_transformer(obj: TransformerMixin):
     """Check that `obj` is Scikit Learn transformer or pipeline."""
@@ -77,37 +77,76 @@ def _validate_raw_docs(X: Iterable[str]):
         if not isinstance(doc, str):
             raise TypeError(f"Expected iterable of only str; encountered {type(doc)}.")
 
-    
-def _validate_docs(docs: Documents):
-    """Check that `docs` is str or other 1-dimensional iterable of str."""
 
+def _validate_strings(strings: Strings):
+    """Check that `strings` is str or other iterable."""
     # If str, say no more
-    if isinstance(docs, str):
+    if isinstance(strings, str):
         return
 
-    if not isinstance(docs, Iterable):
-        raise TypeError(f"Expected str or iterable of str; {type(docs)} object received.")
+    if not isinstance(strings, Iterable):
+        raise TypeError(
+            f"Expected str or iterable of str; {type(strings)} object received."
+        )
 
-    # Ensure array-likes are 1-dim
-    if isinstance(docs, (ndarray, NDFrame)):
-        _check_1d(docs)
 
-    # Check contents if docs won't be exhausted by doing so
-    if isinstance(docs, Collection):
-        for doc in docs:
-            if not isinstance(doc, str):
-                raise TypeError(f"Expected iterable of str; encountered {type(doc)} when iterating.")
-        
-def _validate_tokens(tokens: TokenSeq, check_str=False):
-    if not isinstance(tokens, Sequence):
-        raise TypeError(f"Expected sequence of str, got {type(tokens)}.")
-    if check_str:
-        for token in tokens:
-            if not isinstance(token, str):
-                raise TypeError(f"Expected sequence of str; encountered {type(token)} when iterating.")
+def _check_overwrite(filename, action="warn"):
+    if filename is not None:
+        filename = os.path.normpath(filename)
+        basename = os.path.basename(filename)
+    if os.path.exists(filename):
+        if action == "raise":
+            raise FileExistsError(f"'{basename}' already exists.")
+        elif action == "warn":
+            warnings.warn(f"'{basename}' already exists and will be overwritten.")
+        else:
+            _invalid_value("action", action, ("warn", "raise"))
+
+
+def _check_tokdocs(tokdocs: TokenDocs):
+    if isinstance(tokdocs, str):
+        raise TypeError("Expected one or more collections of str; got str.")
+    if hasattr(tokdocs, "ndim"):
+        if tokdocs.ndim > 1:
+            raise TypeError(
+                f"Expected 1D array-like, got {tokdocs.ndim}D {type(tokdocs).__name__}."
+            )
+    if isinstance(tokdocs, Collection):
+        if not tokdocs:
+            return Collection[str]
+        for obj in tokdocs:
+            if isinstance(obj, str):
+                return Collection[str]
+            else:
+                _validate_tokens(obj)
+                return Collection[Collection[str]]
+    else:
+        raise TypeError(f"Expected collection, got {type(tokdocs).__name__}.")
+
+
+def _validate_tokens(tokens: Tokens):
+    if hasattr(tokens, "ndim"):
+        if tokens.ndim > 1:
+            raise TypeError(
+                f"Expected tokens to be 1D collection of str, got {tokens.ndim}D {type(tokens).__name__}."
+            )
+    if not isinstance(tokens, Collection):
+        raise TypeError(
+            f"Expected tokens to be collection of str, got {type(tokens).__name__}."
+        )
+    for token in tokens:
+        if isinstance(token, str):
+            break
+        else:
+            raise TypeError(
+                f"Expected collection of str; encountered {type(token)} when iterating."
+            )
+
 
 def _invalid_value(param_name, value, valid_options=None):
     if valid_options is not None:
-        raise ValueError(f"Invalid value {value} for `{param_name}`. Valid options: {valid_options}")
+        raise ValueError(
+            f"Invalid value {value} for `{param_name}`. Valid options: {valid_options}"
+        )
     else:
         raise ValueError(f"Invalid value for `{param_name}`: {value}")

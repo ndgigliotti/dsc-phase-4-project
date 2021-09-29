@@ -7,7 +7,7 @@
   <rdf:RDF xmlns:cc="http://creativecommons.org/ns#" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
    <cc:Work>
     <dc:type rdf:resource="http://purl.org/dc/dcmitype/StillImage"/>
-    <dc:date>2021-07-19T06:07:34.872236</dc:date>
+    <dc:date>2021-07-22T13:00:07.167643</dc:date>
     <dc:format>image/svg+xml</dc:format>
     <dc:creator>
      <cc:Agent>
@@ -38,8 +38,8 @@ L 94.95 37.929688
 z
 " style="fill:#eaeaf2;"/>
    </g>
-   <g clip-path="url(#pbc1f56e9a1)">
-    <image height="255" id="image257fbacef9" transform="scale(1 -1)translate(0 -255)" width="255" x="94.95" xlink:href="data:image/png;base64,
+   <g clip-path="url(#p4e13616cba)">
+    <image height="255" id="image8d722aa8f3" transform="scale(1 -1)translate(0 -255)" width="255" x="94.95" xlink:href="data:image/png;base64,
 iVBORw0KGgoAAAANSUhEUgAAAP8AAAD/CAYAAAA+CADKAAADS0lEQVR4nO3VsUlEYRBGUZ8IWoRN2MRiCRZhbqS5bViE4eZmNmAHYmJgsMGziYWB/55TwcfAZba/075fcFYfXz/TE5Zz//AyPWE5l9MDgBnihyjxQ5T4IUr8ECV+iBI/RIkfosQPUeKHKPFDlPghSvwQJX6IEj9EiR+ixA9R4oco8UOU+CFK/BAlfogSP0SJH6LED1HihyjxQ5T4IUr8ECV+iBI/RIkfosQPUeKHKPFDlPghSvwQJX6IEj9EiR+ixA9R4oco8UOU+CFK/BAlfogSP0SJH6LED1HihyjxQ5T4IUr8ECV+iBI/RIkfosQPUeKHKPFDlPghSvwQJX6IEj9EiR+ixA9R4oco8UOU+CFK/BAlfogSP0SJH6LED1HihyjxQ5T4IUr8ECV+iBI/RIkfosQPUeKHKPFDlPghavv+Pe3TI1Zze3ienrCc49vT9ITl+PwQJX6IEj9EiR+ixA9R4oco8UOU+CFK/BAlfogSP0SJH6LED1HihyjxQ5T4IUr8ECV+iBI/RIkfosQPUeKHKPFDlPghSvwQJX6IEj9EiR+ixA9R4oco8UOU+CFK/BAlfogSP0SJH6LED1HihyjxQ5T4IUr8ECV+iBI/RIkfosQPUeKHKPFDlPghSvwQJX6IEj9EiR+ixA9R4oco8UOU+CFK/BAlfogSP0SJH6LED1HihyjxQ5T4IUr8ECV+iBI/RIkfosQPUeKHKPFDlPghSvwQJX6IEj9EiR+ixA9R4oco8UOU+CFK/BAlfogSP0SJH6K2m7vHfXrEaj7fX6cnLOf6yp86NxeFKPFDlPghSvwQJX6IEj9EiR+ixA9R4oco8UOU+CFK/BAlfogSP0SJH6LED1HihyjxQ5T4IUr8ECV+iBI/RIkfosQPUeKHKPFDlPghSvwQJX6IEj9EiR+ixA9R4oco8UOU+CFK/BAlfogSP0SJH6LED1HihyjxQ5T4IUr8ECV+iBI/RIkfosQPUeKHKPFDlPghSvwQJX6IEj9EiR+ixA9R4oco8UOU+CFK/BAlfogSP0SJH6LED1HihyjxQ5T4IUr8ECV+iBI/RIkfosQPUeKHKPFDlPghSvwQJX6IEj9EiR+ixA9R4oco8UOU+CFK/BD1D5XIE+2XrBxdAAAAAElFTkSuQmCC" y="-37.179688"/>
    </g>
    <g id="matplotlib.axis_1">
@@ -1065,7 +1065,7 @@ z
   </g>
  </g>
  <defs>
-  <clipPath id="pbc1f56e9a1">
+  <clipPath id="p4e13616cba">
    <rect height="254.25" width="254.25" x="94.95" y="37.929688"/>
   </clipPath>
  </defs>

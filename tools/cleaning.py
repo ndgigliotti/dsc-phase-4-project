@@ -1,17 +1,37 @@
+import warnings
 from functools import wraps
-from IPython.display import display, HTML
-import pandas as pd
-from deprecation import deprecated
+from typing import Union
+
 import numpy as np
+import pandas as pd
+from IPython.display import HTML, display
+
+from sklearn.utils import deprecated
+from tools import utils
 
 
-def null_rows(data: pd.DataFrame, total: bool = False) -> pd.DataFrame:
+def memory_usage(data: pd.DataFrame, index=True, deep=True, unit="mb"):
+    divs = {"gb": 1e9, "mb": 1e6, "kb": 1e3, "b": 1}
+    try:
+        div = divs[unit.lower()]
+    except KeyError:
+        raise ValueError("Valid units are 'gb', 'mb', 'kb', and 'b'.")
+    mem = data.memory_usage(index=index, deep=deep) / div
+    mem.name = f"{unit.lower()}_used"
+    return mem.sort_values(ascending=False)
+
+
+def null_rows(
+    data: pd.DataFrame, subset: list = None, total: bool = False
+) -> pd.DataFrame:
     """Get rows with missing values.
 
     Parameters
     ----------
     data : DataFrame
         Data for getting rows with missing values.
+    subset: list, optional
+        List of columns to consider. None by default.
     total : bool, optional
         Only get rows which are totally null, defaults to False.
     Returns
@@ -19,35 +39,49 @@ def null_rows(data: pd.DataFrame, total: bool = False) -> pd.DataFrame:
     DataFrame
         Table of rows with missing values.
     """
+
+    if subset is None:
+        subset = data.columns
+    elif isinstance(subset, str):
+        subset = [subset]
     if total:
-        null_mask = data.isnull().all(axis=1)
+        null_mask = data.loc[:, subset].isnull().all(axis=1)
     else:
-        null_mask = data.isnull().any(axis=1)
+        null_mask = data.loc[:, subset].isnull().any(axis=1)
     return data.loc[null_mask].copy()
 
 
 @wraps(null_rows)
-@deprecated(details="use `null_rows` instead")
+@deprecated("use `null_rows` instead")
 def nan_rows(data: pd.DataFrame, total: bool = False) -> pd.DataFrame:
     return null_rows(**locals())
 
 
-def dup_rows(data: pd.DataFrame, **kwargs) -> pd.DataFrame:
+def dup_rows(
+    data: pd.DataFrame, subset: list = None, keep: Union[str, bool] = False
+) -> pd.DataFrame:
     """Get duplicate rows.
 
     Parameters
     ----------
     data : DataFrame
         Data for getting duplicate rows.
-    **kwargs : dict, optional
-        Extra arguments to `DataFrame.duplicated`. Refer to Pandas
-        documentation for all possible arguments.
+    subset: list, optional
+        List of columns to consider. None by default.
+    keep: {'first', 'last', False}, default ``False``
+        Determines which duplicates (if any) to mark.
+            - ``first`` : Mark duplicates as ``True`` except for the first occurrence.
+            - ``last`` : Mark duplicates as ``True`` except for the last occurrence.
+            - False : Mark all duplicates as ``True``.
     Returns
     -------
     DataFrame
         Table of duplicate rows.
     """
-    return data.loc[data.duplicated(**kwargs)].copy()
+    if isinstance(data, pd.Series):
+        data = data.to_frame()
+    mask = data.duplicated(subset=subset, keep=keep)
+    return data.loc[mask].squeeze().copy()
 
 
 def who_is_null(
@@ -85,7 +119,7 @@ def who_is_null(
 
 
 @wraps(who_is_null)
-@deprecated(details="use `who_is_null` instead")
+@deprecated("use `who_is_null` instead")
 def who_is_nan(
     data: pd.DataFrame, column: str = None, index: str = None, total: bool = False
 ) -> np.ndarray:
@@ -136,6 +170,11 @@ def info(data: pd.DataFrame, round_pct: int = 2) -> pd.DataFrame:
     DataFrame
         Table of information.
     """
+    hashable = utils.hashable_cols(data)
+    unhashable = ", ".join(data.columns.difference(hashable))
+    if unhashable:
+        warnings.warn(f"Ignoring unhashable columns: {unhashable}.", RuntimeWarning)
+    data = data.loc[:, utils.hashable_cols(data)]
     n_rows = data.shape[0]
     null = data.isnull().sum().to_frame("null")
     dup = pd.DataFrame(

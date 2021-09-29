@@ -1,12 +1,13 @@
-from typing import Union
+from typing import Callable, Union
 
 import numpy as np
 import pandas as pd
 import seaborn as sns
 from matplotlib import pyplot as plt
-
-from .. import utils
-from .utils import HEATMAP_STYLE, heatmap_figsize
+from sklearn import metrics
+from sklearn.utils.multiclass import unique_labels
+from tools import utils
+from tools.plotting.utils import HEATMAP_STYLE, heatmap_figsize, get_desat_cmap
 
 
 def pair_corr_heatmap(
@@ -126,4 +127,69 @@ def cat_corr_heatmap(
     ax.set_xlabel(xlabel, labelpad=10)
     ax.set_ylabel(ylabel, labelpad=10)
     ax.set_title(title, pad=10)
+    return ax
+
+
+def confusion_matrix(
+    estimator,
+    X_test,
+    y_test,
+    *,
+    labels=None,
+    sample_weight=None,
+    normalize="true",
+    title_scorer=("accuracy", "balanced_accuracy"),
+    center=0.5,
+    annot=True,
+    annot_kws=None,
+    fmt=".2f",
+    cmap="Blues",
+    desat=.7,
+    cbar=False,
+    linewidths=0,
+    linecolor="w",
+    ax=None,
+    size=None,
+):
+
+    y_pred = estimator.predict(X_test)
+
+    if labels is None:
+        labels = unique_labels(y_test, y_pred)
+
+    cm = metrics.confusion_matrix(
+        y_test, y_pred, sample_weight=sample_weight, labels=labels, normalize=normalize
+    )
+
+    cm = pd.DataFrame(cm, index=labels, columns=labels)
+    if size is None:
+        size = heatmap_figsize(cm.shape)
+
+    if ax is None:
+        _, ax = plt.subplots(figsize=size)
+
+    sns.heatmap(
+        cm,
+        center=center,
+        annot=annot,
+        annot_kws=annot_kws,
+        fmt=fmt,
+        cmap=get_desat_cmap(cmap, desat=desat),
+        cbar=cbar,
+        linewidths=linewidths,
+        linecolor=linecolor,
+    )
+
+    if isinstance(title_scorer, (str, Callable)):
+        title_scorer = [title_scorer]
+    title = []
+    for scorer in title_scorer:
+        func = metrics.get_scorer(scorer)
+        score = func(estimator, X_test, y_test, sample_weight=sample_weight)
+        name = scorer.__name__ if hasattr(scorer, "__name__") else scorer
+        name = name.title().replace("_", " ")
+        title.append(f"{name}: {score:.2f}")
+    title = ", ".join(title)
+
+    ax.set(title=title, xlabel="Predicted Value", ylabel="True Value")
     return ax

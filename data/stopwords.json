@@ -1,1 +1,1 @@
-{"MY_STOP": ["mention", "rt", "austin", "sxswi", "southbysouthwest", "america", "sxsw", "link"], "BRAND_STOP": ["applesxsw", "app", "android", "apple", "google", "iphone", "ipad", "andoid", "androidsxsw"]}
+{"MY_STOP": ["rt", "tweet", "southbysouthwest", "#sxswi", "#austin", "america", "twitter", "austin", "link", "sxswi", "sxsw", "#sxsw", "mention"], "BRAND_STOP": ["google", "app", "andoid", "iphone", "android", "androidsxsw", "ipad", "apple", "applesxsw"]}

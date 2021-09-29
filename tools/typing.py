@@ -1,9 +1,16 @@
 from re import Pattern
-from typing import Any, Callable, Collection, Iterable, List, Sequence, Tuple, TypeVar, Union
+from typing import (
+    Any,
+    Callable,
+    Collection,
+    Iterable,
+    Tuple,
+    Union,
+)
 
 from numpy import ndarray
 from numpy.random import BitGenerator, RandomState
-from pandas.core.generic import NDFrame
+from pandas.core.frame import DataFrame
 from pandas.core.series import Series
 from scipy.sparse.base import spmatrix
 from sklearn.base import BaseEstimator
@@ -18,29 +25,32 @@ PatternLike = Union[str, Pattern]
 
 # Series or NDArray
 SeriesOrArray = Union[Series, ndarray]
-ArrayLike = Union[NDFrame, ndarray, spmatrix]
+FrameOrSeries = Union[Series, DataFrame]
+ArrayLike = Union[DataFrame, Series, ndarray, spmatrix]
+
 # Estimator or Pipeline
 EstimatorLike = Union[BaseEstimator, Pipeline]
 
 # One or more strings
 Documents = Union[str, Iterable[str]]
+Strings = Documents
 
-# List of word tokens
-TokenSeq = Sequence[str]
+# Collection of word tokens
+Tokens = Collection[str]
 TokenTuple = Tuple[str]
 
 # One or more token sequences
-TokenDocs = Union[TokenSeq, Collection[TokenSeq]]
+TokenDocs = Union[Tokens, Collection[Tokens]]
 
 # List of tokens with POS tags
-TaggedTokenSeq = Sequence[Tuple[str, str]]
+TaggedTokens = Collection[Tuple[str, str]]
 TaggedTokenTuple = Tuple[Tuple[str, str]]
 
 # One or more tagged token sequences
-TaggedTokenDocs = Union[TaggedTokenSeq, Collection[TaggedTokenSeq]]
+TaggedTokenDocs = Union[TaggedTokens, Collection[TaggedTokens]]
 
 # Function which takes a string
 CallableOnStr = Callable[[str], Any]
 
 # Function which tokenizes a string
-Tokenizer = Callable[[str], TokenSeq]
+Tokenizer = Callable[[str], Tokens]

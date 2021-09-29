@@ -1,24 +1,21 @@
 import re
 import string
-from collections import defaultdict
+from collections import Counter, defaultdict
 from functools import lru_cache, singledispatch
 from types import MappingProxyType
-from typing import Collection, FrozenSet, Set, Type, Union
+from typing import Iterable, Set, Union
 
-import gensim.parsing.preprocessing as gensim_pp
 import nltk
+import numpy as np
 from nltk.corpus.reader import wordnet
 from nltk.sentiment.util import mark_negation as nltk_mark_neg
-from nltk.stem.wordnet import WordNetLemmatizer
-from nltk.tokenize.treebank import TreebankWordDetokenizer
-from numpy.lib.arraysetops import isin
-from sacremoses import MosesDetokenizer
-
-from ..._validation import _invalid_value, _validate_tokens
-from ...typing import TaggedTokenSeq, TaggedTokenTuple, TokenSeq, TokenTuple
-from ..settings import CACHE_SIZE, DEFAULT_SEP
-
-tb_detokenizer = TreebankWordDetokenizer()
+from pandas.core.series import Series
+from tools import utils
+from tools._validation import _validate_tokens
+from tools.language.settings import CACHE_SIZE, DEFAULT_SEP
+from tools.language.utils import process_tokens
+from tools.typing import (TaggedTokens, TaggedTokenTuple, TokenDocs, Tokens,
+                          TokenTuple)
 
 RE_NEG = re.compile(r"_NEG$")
 
@@ -79,19 +76,13 @@ PTB_TO_WORDNET = MappingProxyType(
 """Mapping of Penn Treebank POS tags to Wordnet POS tags."""
 
 
-def moses_detokenize(tokens: TokenSeq, lang="en"):
-    _validate_tokens(tokens, check_str=True)
-    detokenizer = MosesDetokenizer(lang=lang)
-    return detokenizer.detokenize(tokens)
-
-
 @singledispatch
 def mark_negation(
-    tokens: TokenSeq,
+    tokens: Tokens,
     double_neg_flip: bool = False,
     split=False,
     sep: str = DEFAULT_SEP,
-) -> TokenSeq:
+) -> Tokens:
     """Mark tokens '_NEG' which fall between a negating word and punctuation mark.
 
     Wrapper for nltk.sentiment.util.mark_negation. Keeps cache
@@ -138,7 +129,7 @@ def _(
     sep: str = DEFAULT_SEP,
 ) -> TokenTuple:
     """Dispatch for tuple. Keeps cache to reuse previous results."""
-    _validate_tokens(tokens, check_str=True)
+    _validate_tokens(tokens)
     # Make mutable
     tokens = list(tokens)
 
@@ -163,14 +154,14 @@ def _(
 
 @singledispatch
 def pos_tag(
-    tokens: TokenSeq,
+    tokens: Tokens,
     tagset: str = None,
     lang: str = "eng",
     fuse_tuples=False,
     split_tuples=False,
     replace=False,
     sep: str = DEFAULT_SEP,
-) -> Union[TaggedTokenSeq, TokenSeq]:
+) -> Union[TaggedTokens, Tokens]:
     """Tag `tokens` with parts of speech.
 
     Wrapper for `nltk.pos_tag`. Keeps cache to reuse
@@ -234,7 +225,7 @@ def _(
 ) -> TaggedTokenTuple:
     """Dispatch for tuple. Keeps cache to reuse previous results."""
     # Validate params
-    _validate_tokens(tokens, check_str=True)
+    _validate_tokens(tokens)
     if sum([fuse_tuples, split_tuples, replace]) > 1:
         raise ValueError(
             "Only one of `fuse_tuples`, `split_tuples`, or `replace` may be True."
@@ -255,13 +246,31 @@ def _(
     return tuple(tokens)
 
 
-@singledispatch
-def wordnet_lemmatize(tokens: TokenSeq) -> TokenSeq:
+def filter_pos(tokens: TaggedTokens, include=None, exclude=None):
+    if include is None and exclude is None:
+        raise ValueError("Must pass either `include` or `exclude`.")
+    if include is not None and exclude is not None:
+        raise ValueError("Can only pass one of `include` or `exclude`.")
+
+    tokens = utils.swap_index(Series(dict(tokens)))
+    if include is not None:
+        exclude = tokens.index.difference(include)
+    tokens.drop(exclude, inplace=True)
+    return tokens.to_list()
+
+
+def _tag_wordnet_pos(tokens: Tokens):
+    translate = defaultdict(lambda: wordnet.NOUN, **UNIV_TO_WORDNET)
+    return [(w, translate[t]) for w, t in nltk.pos_tag(tokens, tagset="universal")]
+
+
+def wordnet_lemmatize(
+    tokens: TokenDocs, *, preserve: Iterable[str] = None, n_jobs=None
+) -> TokenDocs:
     """Reduce English words to root form using Wordnet.
 
     Tokens are first tagged with parts of speech and then
-    lemmatized accordingly. Keeps cache to reuse previous
-    results.
+    lemmatized accordingly.
 
     Parameters
     ----------
@@ -273,43 +282,25 @@ def wordnet_lemmatize(tokens: TokenSeq) -> TokenSeq:
     Sequence of str
         Lemmatized tokens.
     """
-    # Fallback dispatch to catch any seq of tokens
-    _validate_tokens(tokens)
+    lemmatizer = nltk.WordNetLemmatizer()
+    if preserve is None:
+        preserve = frozenset()
+    else:
+        preserve = frozenset(preserve)
 
-    # Make immutable (hashable)
-    # Send to tuple dispatch for caching
-    tokens = wordnet_lemmatize(tuple(tokens))
+    def process_singular(tokens, lemmatizer=lemmatizer, preserve=preserve):
+        # Tag POS
+        tokens = _tag_wordnet_pos(tokens)
+        # Lemmatize
+        return [w if w in preserve else lemmatizer.lemmatize(w, t) for w, t in tokens]
 
-    # Make mutable and return
-    return list(tokens)
-
-
-@wordnet_lemmatize.register
-@lru_cache(maxsize=CACHE_SIZE, typed=False)
-def _(tokens: tuple) -> TokenTuple:
-    """Dispatch for tuple. Keeps cache to reuse previous results."""
-    _validate_tokens(tokens, check_str=True)
-
-    # Tag POS using the original (non-caching) function
-    tag_toks = nltk.pos_tag(tokens)
-
-    # Convert Penn Treebank tags to Wordnet tags
-    ptb2wordnet = defaultdict(lambda: wordnet.NOUN, **PTB_TO_WORDNET)
-    tag_toks = [(w, ptb2wordnet[t]) for w, t in tag_toks]
-
-    # Lemmatize
-    wnl = WordNetLemmatizer()
-    tokens = [wnl.lemmatize(w, t) for w, t in tag_toks]
-
-    # Make immutable and return
-    return tuple(tokens)
+    return process_tokens(
+        tokens, process_singular, n_jobs=n_jobs, bar_desc="wordnet_lemmatize"
+    )
 
 
-@singledispatch
-def porter_stem(tokens: TokenSeq, lowercase: bool = False) -> TokenSeq:
+def porter_stem(tokens: Tokens, preserve: Iterable[str] = None, n_jobs=None) -> Tokens:
     """Reduce English words to stems using Porter algorithm.
-
-    Keeps cache to reuse previous results.
 
     Parameters
     ----------
@@ -323,29 +314,22 @@ def porter_stem(tokens: TokenSeq, lowercase: bool = False) -> TokenSeq:
     Sequence of str
         Stemmed tokens.
     """
-    # Fallback dispatch to catch any seq of tokens
-    _validate_tokens(tokens)
-
-    # Make immutable (hashable)
-    # Send to tuple dispatch for caching
-    tokens = porter_stem(tuple(tokens), lowercase=lowercase)
-
-    # Make mutable and return
-    return list(tokens)
-
-
-@porter_stem.register
-@lru_cache(maxsize=CACHE_SIZE, typed=False)
-def _(tokens: tuple, lowercase: bool = False) -> TokenTuple:
-    """Dispatch for tuple. Keeps cache to reuse previous results."""
-    _validate_tokens(tokens, check_str=True)
-
-    # Stem and return
     stemmer = nltk.PorterStemmer()
-    return tuple(stemmer.stem(x, lowercase) for x in tokens)
+
+    if preserve is None:
+        preserve = frozenset()
+    else:
+        preserve = frozenset(preserve)
+
+    def process_singular(tokens, stemmer=stemmer, preserve=preserve):
+        return [w if w in preserve else stemmer.stem(w, False) for w in tokens]
+
+    return process_tokens(
+        tokens, process_singular, n_jobs=n_jobs, bar_desc="porter_stem"
+    )
 
 
-def filter_length(tokens: TokenSeq, min_char=3, max_char=15) -> TokenSeq:
+def length_filter(tokens: TokenDocs, min_char=0, max_char=20, n_jobs=None) -> TokenDocs:
     """Remove tokens with too few or too many characters.
 
     Parameters
@@ -353,26 +337,99 @@ def filter_length(tokens: TokenSeq, min_char=3, max_char=15) -> TokenSeq:
     tokens : sequence of str
         Tokens to filter by length.
     min_char : int, optional
-        Minimum length, by default 3.
+        Minimum length, by default 0.
     max_char : int, optional
-        Maximum length, by default 15.
+        Maximum length, by default 20.
 
     Returns
     -------
     Sequence of str
         Filtered tokens.
     """
-    _validate_tokens(tokens, check_str=True)
-    if min_char is not None:
-        tokens = [x for x in tokens if min_char <= len(x)]
+    if min_char is None:
+        min_char = 0
     if max_char is not None:
-        tokens = [x for x in tokens if len(x) <= max_char]
-    return tokens
+        if min_char > max_char or max_char < min_char:
+            raise ValueError("`min_char` must be less than `max_char`.")
+
+    def process_singular(tokens, min_char=min_char, max_char=max_char):
+        if max_char is None:
+            tokens = [w for w in tokens if min_char <= len(w)]
+        else:
+            tokens = [w for w in tokens if min_char <= len(w) <= max_char]
+        return tokens
+
+    return process_tokens(
+        tokens, process_singular, n_jobs=n_jobs, bar_desc="length_filter"
+    )
 
 
-def filter_stopwords(
-    tokens: TokenSeq, stopwords: Union[str, Set[str]] = "nltk_english"
-) -> TokenSeq:
+def uniq_ratio(text: str):
+    return len(set(text)) / len(text)
+
+
+def dom_ratio(text):
+    freqs = np.array(list(Counter(text).values()))
+    return freqs.max() / freqs.sum()
+
+
+def uniq_char_thresh(tokens: TokenDocs, thresh=0.375, n_jobs=None) -> TokenDocs:
+    """Remove tokens with low character uniqueness ratio.
+
+    Parameters
+    ----------
+    tokens : sequence of str
+        Tokens to filter.
+    thresh : float, optional
+        Minimum uniquess ratio, by default 0.375.
+
+    Returns
+    -------
+    Sequence of str
+        Filtered tokens.
+    """
+    if not (0.0 < thresh < 1.0):
+        raise ValueError("`thresh` must be between 0.0 and 1.0.")
+
+    def process_singular(tokens, thresh=thresh):
+        return [w for w in tokens if uniq_ratio(w) > thresh]
+
+    return process_tokens(
+        tokens, process_singular, n_jobs=n_jobs, bar_desc="uniq_char_thresh"
+    )
+
+
+def char_dom_thresh(tokens: TokenDocs, thresh=0.75, n_jobs=None) -> TokenDocs:
+    """Remove tokens which are dominated by a single character.
+
+    Parameters
+    ----------
+    tokens : sequence of str
+        Tokens to filter.
+    thresh : float, optional
+        Maximum majority ratio, by default 0.25.
+
+    Returns
+    -------
+    Sequence of str
+        Filtered tokens.
+    """
+    if not (0 < thresh < 1):
+        raise ValueError("`thresh` must be between 0.0 and 1.0.")
+
+    def process_singular(tokens, thresh=thresh):
+        return [w for w in tokens if dom_ratio(w) < thresh]
+
+    return process_tokens(
+        tokens, process_singular, n_jobs=n_jobs, bar_desc="char_dom_thresh"
+    )
+
+
+def remove_stopwords(
+    tokens: TokenDocs,
+    stopwords: Union[str, Set[str]] = "nltk_english",
+    n_jobs: int = None,
+) -> TokenDocs:
     """Remove stopwords from `tokens`.
 
     Parameters
@@ -388,15 +445,20 @@ def filter_stopwords(
     Sequence of str
         Tokens with stopwords removed.
     """
-    _validate_tokens(tokens, check_str=True)
     if isinstance(stopwords, str):
-        stopwords = fetch_stopwords(stopwords)
+        stopwords = frozenset(fetch_stopwords(stopwords))
     else:
-        stopwords = set(stopwords)
-    return [x for x in tokens if x not in stopwords]
+        stopwords = frozenset(stopwords)
+
+    def process_singular(tokens, stopwords=stopwords):
+        return [w for w in tokens if w not in stopwords]
+
+    return process_tokens(
+        tokens, process_singular, n_jobs=n_jobs, bar_desc="remove_stopwords"
+    )
 
 
-def fetch_stopwords(query: str) -> FrozenSet[str]:
+def fetch_stopwords(query: str) -> Set[str]:
     """Fetch a recognized stopwords set.
 
     Recognized sets include 'skl_english', 'nltk_english', 'nltk_spanish',
@@ -411,7 +473,7 @@ def fetch_stopwords(query: str) -> FrozenSet[str]:
 
     Returns
     -------
-    frozenset of str
+    set of str
         A set of stop words.
     """
     # Validate string
@@ -423,7 +485,7 @@ def fetch_stopwords(query: str) -> FrozenSet[str]:
         if set("|&-^") & set(query):
             # Construct Python expression to fetch each set and perform set ops
             expr = re.sub("\w+", lambda x: f"fetch_stopwords('{x[0]}')", query)
-            # Restrict symbols
+            # Sanitize by restricting symbols
             symbols = set(re.findall(fr"[{string.punctuation}]|\sif\s|\selse\s", expr))
             if not symbols.issubset(set("|&-^_()'")):
                 raise ValueError(f"Invalid query: {query}")
@@ -433,7 +495,7 @@ def fetch_stopwords(query: str) -> FrozenSet[str]:
         elif query in {"skl_english", "skl"}:
             from sklearn.feature_extraction.text import ENGLISH_STOP_WORDS
 
-            result = frozenset(ENGLISH_STOP_WORDS)
+            result = set(ENGLISH_STOP_WORDS)
         # Fetch NLTK stopwords
         elif query.startswith("nltk"):
             if "_" in query:
@@ -444,15 +506,15 @@ def fetch_stopwords(query: str) -> FrozenSet[str]:
                     raise ValueError(f"Invalid query: {query}")
                 # NLTK stopwords fileid e.g. 'english', 'spanish'
                 fileid = components[1]
-                result = frozenset(nltk.corpus.stopwords.words(fileids=fileid))
+                result = set(nltk.corpus.stopwords.words(fileids=fileid))
             else:
                 # Defaults to 'english' if no languages specified
-                result = frozenset(nltk.corpus.stopwords.words("english"))
+                result = set(nltk.corpus.stopwords.words("english"))
         # Fetch Gensim stopwords
         elif query in {"gensim_english", "gensim"}:
             from gensim.parsing.preprocessing import STOPWORDS
 
-            result = frozenset(STOPWORDS)
+            result = set(STOPWORDS)
         # Raise ValueError if unrecognized
         else:
             raise ValueError(f"Invalid query: {query}")

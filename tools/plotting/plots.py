@@ -7,10 +7,15 @@ import pandas as pd
 import seaborn as sns
 from matplotlib import ticker
 from pandas.core.groupby import DataFrameGroupBy, SeriesGroupBy
-
-from .._validation import _validate_orient, _validate_sort
-from .annotate import add_tukey_marks, annot_bars
-from .utils import cat_palette, flip_axis, heat_palette, set_invisible, smart_subplots
+from tools._validation import _validate_orient, _validate_sort
+from tools.plotting.annotate import add_tukey_marks, annot_bars
+from tools.plotting.utils import (
+    cat_palette,
+    flip_axis,
+    heat_palette,
+    set_invisible,
+    smart_subplots,
+)
 
 
 def mirror_plot(
@@ -244,7 +249,8 @@ def countplot(
     orient: str = "h",
     sort: str = "desc",
     topn: int = None,
-    annot: bool = True,
+    log_scale: bool = False,
+    annot: bool = False,
     size: Tuple[float, float] = (5, 5),
     ncols: int = 3,
     ax: plt.Axes = None,
@@ -289,6 +295,7 @@ def countplot(
         _, ax = plt.subplots(figsize=size)
 
     df = data.value_counts(normalize=normalize).to_frame("Count")
+
     if topn is not None:
         if topn <= df.shape[0]:
             df = df.iloc[:topn]
@@ -296,7 +303,10 @@ def countplot(
             raise ValueError("`topn` must be <= number of unique values.")
     df.index.name = data.name or "Series"
     df.reset_index(inplace=True)
-    pal = heat_palette(df["Count"], heat, desat=heat_desat)
+    if log_scale:
+        pal = heat_palette(df["Count"].agg("log10"), heat, desat=heat_desat)
+    else:
+        pal = heat_palette(df["Count"], heat, desat=heat_desat)
     ax = barplot(
         data=df,
         x=data.name or "Series",
@@ -309,7 +319,13 @@ def countplot(
     )
     title = f"'{data.name}' Value Counts" if data.name else "Value Counts"
     ax.set(title=title)
-    format_spec = "{x:.0%}" if normalize else "{x:,.0f}"
+    if log_scale:
+        ax.set_xscale("log") if orient == "h" else ax.set_yscale("log")
+
+    if normalize:
+        format_spec = "{x:.0%}"
+    else:
+        format_spec = "{x:,.0f}"
     if annot:
         annot_bars(ax, orient=orient, format_spec=format_spec)
 
@@ -319,6 +335,7 @@ def countplot(
     else:
         ax.yaxis.set_major_formatter(ticker.StrMethodFormatter(format_spec))
         ax.set(xlabel=None)
+
     return ax
 
 
@@ -332,7 +349,8 @@ def _(
     orient: str = "h",
     sort: str = "desc",
     topn: int = None,
-    annot: bool = True,
+    log_scale: bool = False,
+    annot: bool = False,
     size: Tuple[float, float] = (5, 5),
     ncols: int = 3,
     ax: plt.Axes = None,
@@ -358,6 +376,7 @@ def _(
             orient=orient,
             sort=sort,
             topn=topn,
+            log_scale=log_scale,
             annot=annot,
             ax=ax,
         )
@@ -375,8 +394,9 @@ def _(
     heat_desat: float = 0.6,
     orient: str = "h",
     sort: str = "desc",
-     topn: int = None,
-    annot: bool = True,
+    topn: int = None,
+    log_scale: bool = False,
+    annot: bool = False,
     size: Tuple[float, float] = (5, 5),
     ncols: int = 3,
     ax: plt.Axes = None,
@@ -402,6 +422,7 @@ def _(
             orient=orient,
             sort=sort,
             topn=topn,
+            log_scale=log_scale,
             annot=annot,
             ax=ax,
         )

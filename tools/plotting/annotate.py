@@ -8,8 +8,36 @@ from numpy import ndarray
 import pandas as pd
 from pandas.core.series import Series
 
-from ..outliers import tukey_fences
-from .. import utils
+from tools.outliers import tukey_fences
+from tools import utils
+
+
+def draw_line(
+    ax: Axes,
+    *,
+    x: Union[int, float] = None,
+    y: Union[int, float] = None,
+    annot: bool = True,
+    line_color: str = "k",
+    line_style: str = "--",
+    pad_title=20,
+    num_format: str = ",.0f",
+):
+    if not (x is None or y is None):
+        raise ValueError("Cannot pass both `x` and `y`.")
+    if x is not None:
+        ax.axvline(x, ls=line_style, c=line_color)
+        text_y = ax.get_ylim()[1] * 1.01
+        ax.text(x, text_y, f"{x:{num_format}}", ha="center")
+    elif y is not None:
+        ax.axhline(y, ls=line_style, c=line_color)
+        text_x = ax.get_xlim()[1] * 1.01
+        ax.text(text_x, y, f"{y:{num_format}}", ha="center")
+    else:
+        raise ValueError("Must specify either `x` or `y`.")
+    if annot and pad_title:
+        ax.set_title(ax.get_title(), pad=pad_title)
+    return ax
 
 
 def add_tukey_marks(
@@ -20,6 +48,7 @@ def add_tukey_marks(
     fence_color: str = "k",
     fence_style: str = "--",
     annot_quarts: bool = False,
+    num_format: str = ".1f",
 ) -> Axes:
     """Add IQR box and fences to a histogram-like plot.
 
@@ -48,8 +77,8 @@ def add_tukey_marks(
         if annot_quarts:
             ax.text(q1, text_yval, "Q1", ha="center")
             ax.text(q3, text_yval, "Q3", ha="center")
-        ax.text(upper, text_yval, "Fence", ha="center")
-        ax.text(lower, text_yval, "Fence", ha="center")
+        ax.text(upper, text_yval, f"{upper:{num_format}}", ha="center")
+        ax.text(lower, text_yval, f"{lower:{num_format}}", ha="center")
     return ax
 
 
