@@ -1,13 +1,13 @@
 <div align="center"><img src="images/hitchcock.png", width=250></div>
 
-# Predicting Brand Sentiment on Twitter
+# Apple Brand Sentiment at SXSW
 
 - Nick Gigliotti
 - [ndgigliotti@gmail.com](ndgigliotti@gmail.com)
 
 # Business Problem
 
-Apple has asked me to create a strong predictive model for detecting positive, negative, and neutral sentiment in tweets. They are primarily concerned with tweets about their company and products, but also might want to know what people are saying about competitors. They intend to use the model to classify new, never-before-seen, tweets, in order to conduct their research. My goals are:
+Apple has asked me to create an accurate explanatory model for detecting positive and negative sentiment in tweets. They are primarily concerned with tweets about their company and products. My goals are:
 
 1. Create an accurate explanatory classifier which classifies tweets as Positive or Negative.
 2. Find out what people are saying about Apple and its products (at South by Southwest, 2011).
