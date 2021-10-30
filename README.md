@@ -31,7 +31,7 @@ I perform minimal text cleaning before BERT. I get rid of unreadable unicode sym
 
 # Methods and Model
 
-I finetune a highly accurate pre-trained BERT (deep neural network) after spending considerable effort on conventional models. The BERT is pre-trained on the Toronto Book Corpus and Wikipedia, then finetuned with one additional layer of neurons on this dataset. A multi-layer perceptron with 2 hidden layers is used as the classifier. The final model, whose confusion matrix is reproduced below, has an accuracy score of 93%.
+I finetune a highly accurate pre-trained BERT (deep neural network) after spending considerable effort on conventional models. The BERT was pre-trained on the Toronto Book Corpus and Wikipedia, then finetuned with one additional layer of neurons on this dataset. A multi-layer perceptron with 2 hidden layers is used as the classifier. The final model, whose confusion matrix is reproduced below, has an accuracy score of 93%.
 
 <div align="center"><img src="images\bert_2_diagnostics.svg"></div>
  
