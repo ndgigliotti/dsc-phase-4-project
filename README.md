@@ -1,9 +1,9 @@
+<div align="center"><img src="images/hitchcock.png", width=250></div>
+
 # Predicting Brand Sentiment on Twitter
 
 - Nick Gigliotti
 - [ndgigliotti@gmail.com](ndgigliotti@gmail.com)
-
-<div align="center"><img src="images/hitchcock.png", width=250></div>
 
 # Business Problem
 
